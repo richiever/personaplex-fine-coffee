@@ -159,6 +159,12 @@ Personaplex finetunes Moshi and benefits from the generalization capabilities of
 You enjoy having a good conversation. Have a technical discussion about fixing a reactor core on a spaceship to Mars. You are an astronaut on a Mars mission. Your name is Alex. You are already dealing with a reactor core meltdown on a Mars mission. Several ship systems are failing, and continued instability will lead to catastrophic failure. You explain what is happening and you urgently ask for help thinking through how to stabilize the reactor.
 ```
 
+## Documentation
+
+For detailed technical documentation:
+
+- **[Language Model Architecture](docs/LM_ARCHITECTURE.md)**: Comprehensive explanation of the `lm.py` language model implementation, including the two-stage transformer design, depformer architecture, and streaming generation mechanisms.
+
 ## License
 
 The present code is provided under the MIT license. The weights for the models are released under the NVIDIA Open Model license.
