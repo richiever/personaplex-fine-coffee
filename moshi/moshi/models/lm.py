@@ -29,26 +29,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from functools import partial
-from os.path import splitext
-import logging
-import numpy as np
-import sys
-from typing import Optional, Union, List, Tuple, Callable, Iterator
-import sphn
-import torch
-from tqdm.auto import tqdm
-
-from ..utils.sampling import sample_token
-from ..utils.compile import CUDAGraphed
-from ..modules.streaming import StreamingStateDict, StreamingContainer, StreamingModule, load_streaming_state
-from ..modules.transformer import (
-    StreamingTransformer,
-    create_norm_fn,
-)
-
 """
 PersonaPlex Language Model (lm.py)
 ====================================
@@ -131,6 +111,26 @@ in the README like "Jerusalem Shakshuka" restaurant):
 This leverages the same Fisher corpus conversational capabilities while adapting to
 the specific coffee ordering domain.
 """
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from functools import partial
+from os.path import splitext
+import logging
+import numpy as np
+import sys
+from typing import Optional, Union, List, Tuple, Callable, Iterator
+import sphn
+import torch
+from tqdm.auto import tqdm
+
+from ..utils.sampling import sample_token
+from ..utils.compile import CUDAGraphed
+from ..modules.streaming import StreamingStateDict, StreamingContainer, StreamingModule, load_streaming_state
+from ..modules.transformer import (
+    StreamingTransformer,
+    create_norm_fn,
+)
 
 logger = logging.getLogger(__name__)
 
