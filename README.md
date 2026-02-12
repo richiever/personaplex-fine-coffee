@@ -152,6 +152,18 @@ You enjoy having a good conversation. Have a casual conversation about favorite 
 
 Use the prompt `You enjoy having a good conversation.` for the "Pause Handling", "Backchannel" and "Smooth Turn Taking" evaluation categories of FullDuplexBench.
 
+## Fine-Tuning
+
+PersonaPlex can be fine-tuned for custom conversational scenarios such as coffee shop ordering, technical support, or other domain-specific dialogues. See [FINE_TUNING.md](FINE_TUNING.md) for a comprehensive guide on:
+
+- Using `moshi/moshi/models/lm.py` for fine-tuning
+- Preparing data for custom domains (e.g., coffee shop conversations)
+- Creating Fisher corpus-style prompts
+- Training loop examples
+- Evaluation strategies
+
+The model was originally trained on Fisher English Corpus conversations and synthetic customer service dialogues, making it well-suited for fine-tuning on similar conversational tasks.
+
 ## Generalization
 
 Personaplex finetunes Moshi and benefits from the generalization capabilities of the underlying [Helium](https://kyutai.org/blog/2025-04-30-helium) LLM. Thanks to the broad training corpus of the backbone, we find that the model will respond plausibly to out-of-distribution prompts and lead to unexpected or fun conversations. We encourage experimentation with different prompts to test the model's emergent ability to handle scenarios outside its training distribution. As an inspiration we feature the following astronaut prompt in the WebUI:

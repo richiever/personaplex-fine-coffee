@@ -49,6 +49,89 @@ from ..modules.transformer import (
     create_norm_fn,
 )
 
+"""
+PersonaPlex Language Model (lm.py)
+====================================
+
+This module contains the core language model for PersonaPlex, a full-duplex conversational
+speech model. It supports both inference (streaming and batched) and fine-tuning.
+
+Fine-Tuning Guide
+-----------------
+
+This file is designed for fine-tuning PersonaPlex on custom conversational datasets, such as:
+- Coffee shop ordering scenarios (customer service role)
+- Fisher English Corpus conversations (casual conversations)
+- Custom domain-specific dialogues
+
+The model was originally trained on:
+1. Fisher English Corpus - Real casual conversations with LLM-labeled prompts
+2. Synthetic customer service dialogues - Various service scenarios
+
+Key Components for Fine-Tuning:
+--------------------------------
+
+1. **LMModel class**: The main transformer-based language model
+   - Processes audio codes from the MIMI codec (8 parallel streams)
+   - Includes text modeling capability
+   - Uses a dual-transformer architecture (main transformer + depformer)
+
+2. **forward_train() method**: The entry point for fine-tuning
+   - Use this method during training loops to get logits and masks
+   - Returns LMOutput with logits for both audio and text
+   - Handles code delays and masking automatically
+   
+   Example training loop structure:
+   ```python
+   model = LMModel(...)
+   model.train()
+   
+   for batch in dataloader:
+       codes = batch['codes']  # Shape: [B, K, T] where K=num_codebooks
+       output = model.forward_train(codes)
+       
+       # Compute loss on audio
+       audio_loss = criterion(
+           output.logits[output.mask],
+           targets[output.mask]
+       )
+       
+       # Compute loss on text
+       text_loss = criterion(
+           output.text_logits[output.text_mask],
+           text_targets[output.text_mask]
+       )
+       
+       loss = audio_loss + text_loss
+       loss.backward()
+       optimizer.step()
+   ```
+
+3. **LMGen class**: For streaming inference (used in server.py and offline.py)
+   - Not used during training
+   - Generates responses one timestep at a time with low latency
+
+Fine-Tuning for Coffee Shop Ordering:
+--------------------------------------
+
+To fine-tune for coffee shop ordering scenarios (similar to the customer service examples
+in the README like "Jerusalem Shakshuka" restaurant):
+
+1. Prepare your data:
+   - Convert coffee shop dialogues to audio using TTS or real recordings
+   - Encode audio to codes using the MIMI codec
+   - Create text prompts like: "You work for Fine Coffee Shop which is a coffee shop
+     and your name is Alex. Information: Menu includes Latte ($4.50), Cappuccino ($4.75),
+     Espresso ($3.00). Pastries available: Croissant ($3.50), Muffin ($3.00)."
+
+2. Use forward_train() in your training script
+3. The model will learn to respond in the coffee shop service role
+4. Evaluate using offline.py with test scenarios
+
+This leverages the same Fisher corpus conversational capabilities while adapting to
+the specific coffee ordering domain.
+"""
+
 logger = logging.getLogger(__name__)
 
 AUDIO_TOKENS_PER_STREAM = 8
@@ -529,6 +612,39 @@ class LMModel(StreamingContainer):
         return logits
 
     def forward_train(self, codes: torch.Tensor):
+        """Forward pass for training and fine-tuning.
+        
+        This is the primary method to use when fine-tuning PersonaPlex for custom scenarios
+        such as coffee shop ordering, technical support, or other conversational tasks using
+        Fisher corpus-style dialogues.
+        
+        Args:
+            codes: Tensor of audio/text codes from MIMI codec
+                   Shape: [B, K, T] where:
+                   - B: batch size
+                   - K: number of codebooks (typically 9: 1 text + 8 audio)
+                   - T: sequence length (time steps)
+        
+        Returns:
+            LMOutput containing:
+                - logits: Predictions for audio codebooks [B, K, T, card]
+                - mask: Valid position mask for audio [B, K, T]
+                - text_logits: Predictions for text [B, 1, T, text_card]
+                - text_mask: Valid position mask for text [B, 1, T]
+        
+        Example:
+            For fine-tuning on coffee shop dialogues:
+            
+            >>> model = LMModel(...)
+            >>> model.train()
+            >>> # codes prepared from your coffee shop audio data
+            >>> output = model.forward_train(codes)
+            >>> # Compute cross-entropy loss on valid positions
+            >>> loss = F.cross_entropy(
+            ...     output.logits[output.mask].view(-1, model.card),
+            ...     targets[output.mask].view(-1)
+            ... )
+        """
         B, K, T = codes.shape
         # Delaying codes and removing the last time step that will never be an input.
         initial = self._get_initial_token().expand(B, -1, -1)
