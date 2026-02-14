@@ -43,6 +43,10 @@ USER_VOICE_COUNT = 100
 
 # Silence padding (variable per paper section 3.2.2)
 SILENCE_TOKENS = [948, 243, 1178, 546, 1736, 1030, 1978, 2008]
+# 440 Hz sine wave tokens for user audio during system prompt (from PersonaPlex lm.py)
+SINE_TOKENS = [430, 1268, 381, 1611, 1095, 1495, 56, 472]
+# PAD token for agent text during voice/silence phases
+PAD_TOKEN = 3
 ZERO_TOKEN = -1
 
 
@@ -283,22 +287,57 @@ def assemble_pt_files():
 
         print(f"  [{ci + 1}/{len(conversations)}] {conv_id}...", end=" ")
 
-        # Encode system prompt if present
+        # Build Hybrid System Prompt (PersonaPlex format)
         system_prompt = conv.get("system_prompt", "")
-        system_tokens = []
-        system_frames = 0
+        hybrid_prompt_frames = 0
+        hybrid_text_tokens = []
+        hybrid_agent_audio = []
+        hybrid_user_audio = []
 
         if system_prompt:
-            # Remove <system> tags if present, then encode
-            cleaned_prompt = system_prompt.replace("<system>", "").strip()
-            system_tokens = sp.Encode(cleaned_prompt)
-            # Allocate ~2 seconds (25 frames at 12.5 Hz) for system prompt
-            system_frames = 25
+            # Wrap with <system> delimiters as PersonaPlex expects
+            if not system_prompt.strip().startswith("<system>"):
+                system_prompt = f"<system> {system_prompt.strip()} <system>"
+            else:
+                # Already has tags, ensure proper spacing
+                system_prompt = system_prompt.replace("<system>", "<system> ").replace("  ", " ")
+
+            # Encode system prompt text
+            system_tokens = sp.Encode(system_prompt)
+
+            # Phase 1: Silence padding before text prompt (~0.5s = 6 frames at 12.5 Hz)
+            pre_silence_frames = 6
+            for _ in range(pre_silence_frames):
+                hybrid_text_tokens.append(PAD_TOKEN)
+                hybrid_agent_audio.append(torch.tensor(SILENCE_TOKENS, dtype=torch.long).unsqueeze(1))
+                hybrid_user_audio.append(torch.tensor(SINE_TOKENS, dtype=torch.long).unsqueeze(1))
+
+            # Phase 2: Text prompt with system tokens
+            # Distribute system tokens across frames (~2s = 25 frames)
+            text_prompt_frames = max(25, len(system_tokens))  # At least 25 frames
+            for i in range(text_prompt_frames):
+                # Distribute tokens evenly across frames
+                if i < len(system_tokens):
+                    hybrid_text_tokens.append(system_tokens[i])
+                else:
+                    hybrid_text_tokens.append(PAD_TOKEN)  # Pad remaining frames
+
+                hybrid_agent_audio.append(torch.tensor(SILENCE_TOKENS, dtype=torch.long).unsqueeze(1))
+                hybrid_user_audio.append(torch.tensor(SINE_TOKENS, dtype=torch.long).unsqueeze(1))
+
+            # Phase 3: Silence padding after text prompt (~0.5s = 6 frames)
+            post_silence_frames = 6
+            for _ in range(post_silence_frames):
+                hybrid_text_tokens.append(PAD_TOKEN)
+                hybrid_agent_audio.append(torch.tensor(SILENCE_TOKENS, dtype=torch.long).unsqueeze(1))
+                hybrid_user_audio.append(torch.tensor(SINE_TOKENS, dtype=torch.long).unsqueeze(1))
+
+            hybrid_prompt_frames = pre_silence_frames + text_prompt_frames + post_silence_frames
 
         agent_chunks = []
         user_chunks = []
         text_info = []
-        frame_offset = system_frames  # Start after system prompt frames
+        frame_offset = hybrid_prompt_frames  # Start after hybrid system prompt
 
         for ti, turn in enumerate(conv["turns"]):
             wav_path = AUDIO_DIR / f"{conv_id}_turn_{ti:02d}_{turn['role']}.wav"
@@ -359,36 +398,39 @@ def assemble_pt_files():
                 user_chunks.append(silence_frame.repeat(1, gap))
                 frame_offset += gap
 
-        agent_codes = torch.cat(agent_chunks, dim=1)
-        user_codes = torch.cat(user_chunks, dim=1)
+        # Concatenate conversation audio chunks
+        agent_codes = torch.cat(agent_chunks, dim=1) if agent_chunks else torch.empty((8, 0), dtype=torch.long)
+        user_codes = torch.cat(user_chunks, dim=1) if user_chunks else torch.empty((8, 0), dtype=torch.long)
         T_conv = agent_codes.shape[1]  # Conversation frames only
-        T_total = system_frames + T_conv  # System prompt + conversation
+        T_total = hybrid_prompt_frames + T_conv  # Hybrid prompt + conversation
 
-        # Initialize text tokens for entire sequence
+        # Build text token sequence
         text_tokens = torch.full((1, T_total), ZERO_TOKEN, dtype=torch.long)
 
-        # Add system prompt tokens at the beginning
-        if system_tokens:
-            for j, tid in enumerate(system_tokens):
-                frame_idx = int(j * system_frames / len(system_tokens))
-                if frame_idx < system_frames:
-                    text_tokens[0, frame_idx] = tid
-        # Add conversation text tokens (offset by system_frames)
+        # Add hybrid prompt text tokens at the beginning
+        for i, token in enumerate(hybrid_text_tokens):
+            if i < T_total:
+                text_tokens[0, i] = token
+
+        # Add conversation text tokens (offset by hybrid_prompt_frames)
         for info in text_info:
             token_ids = sp.Encode(info["text"])
-            start = info["start_frame"]  # Already includes system_frames offset
+            start = info["start_frame"]  # Already includes hybrid_prompt_frames offset
             num_frames = info["num_frames"]
             for j, tid in enumerate(token_ids):
                 frame_idx = start + int(j * num_frames / len(token_ids))
                 if frame_idx < T_total:
                     text_tokens[0, frame_idx] = tid
 
-        # Add silence frames for system prompt duration in audio streams
-        if system_frames > 0:
-            system_silence_agent = silence_frame.repeat(1, system_frames)
-            system_silence_user = silence_frame.repeat(1, system_frames)
-            agent_codes = torch.cat([system_silence_agent, agent_codes], dim=1)
-            user_codes = torch.cat([system_silence_user, user_codes], dim=1)
+        # Concatenate hybrid prompt audio with conversation audio
+        if hybrid_prompt_frames > 0:
+            # Concatenate all hybrid prompt audio frames
+            hybrid_agent_audio_cat = torch.cat(hybrid_agent_audio, dim=1)  # Shape: (8, hybrid_prompt_frames)
+            hybrid_user_audio_cat = torch.cat(hybrid_user_audio, dim=1)    # Shape: (8, hybrid_prompt_frames)
+
+            # Prepend hybrid prompt to conversation
+            agent_codes = torch.cat([hybrid_agent_audio_cat, agent_codes], dim=1)
+            user_codes = torch.cat([hybrid_user_audio_cat, user_codes], dim=1)
 
         final = torch.cat([text_tokens, agent_codes, user_codes], dim=0)
 
