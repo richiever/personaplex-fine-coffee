@@ -104,7 +104,7 @@ class ServerState:
         self.voice_prompt_dir = voice_prompt_dir
         self.frame_size = int(self.mimi.sample_rate / self.mimi.frame_rate)
         self.lm_gen = LMGen(lm,
-                            audio_silence_frame_cnt=int(0.5 * self.mimi.frame_rate),
+                            audio_silence_frame_cnt=int(0.25 * self.mimi.frame_rate),
                             sample_rate=self.mimi.sample_rate,
                             device=device,
                             frame_rate=self.mimi.frame_rate,
