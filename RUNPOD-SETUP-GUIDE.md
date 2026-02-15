@@ -116,7 +116,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ```bash
 cd /workspace
 
-huggingface-cli download AnthrolyticB/personaplex-training-data-test training.json \
+huggingface-cli download AnthrolyticB/personaplex-training-data-v2 training.json \
   --repo-type dataset \
   --local-dir /workspace \
   --force-download
@@ -152,51 +152,92 @@ EOF
 
 ---
 
-## Part 5: Copy Pipeline Script (1 minute)
+## Part 5: Download Pre-Generated .pt Training Files (2 minutes)
 
-### 5.1 Copy to Workspace Root
+### 5.1 Download from HuggingFace
 
-**Why:** Easier to run from /workspace without path issues
+**Pre-generated .pt files are ready to download** - saves 10-15 minutes!
+
+```bash
+cd /workspace
+mkdir -p pt_files
+
+huggingface-cli download AnthrolyticB/personaplex-training-data-v2 \
+  --include "pt_files/*.pt" \
+  --repo-type dataset \
+  --local-dir /workspace \
+  --force-download
+```
+
+**What this downloads:**
+- 200 pre-encoded .pt files (conversation tensors)
+- Already aligned with fixed text-audio clustering
+- Ready for training immediately
+
+### 5.2 Verify Downloaded Files
+
+```bash
+# Count files
+ls /workspace/pt_files/*.pt | wc -l
+# Should output: 200
+
+# Check file sizes
+ls -lh /workspace/pt_files/*.pt | head -5
+# Should see: conv_0000.pt, conv_0001.pt, etc. (~500KB-2MB each)
+
+# Verify tensor structure
+python << 'EOF'
+import torch
+sample = torch.load('/workspace/pt_files/conv_0000.pt')
+print(f"Shape: {sample.shape}")
+print(f"Streams: {sample.shape[0]} (expected: 17)")
+print(f"Frames: {sample.shape[1]}")
+print(f"✓ .pt files are valid!")
+EOF
+```
+
+**Expected output:**
+```
+Shape: torch.Size([17, 755])
+Streams: 17 (expected: 17)
+Frames: 755
+✓ .pt files are valid!
+```
+
+---
+
+## Part 6: Alternative - Generate .pt Files Yourself (Optional)
+
+**Skip this section if you downloaded pre-generated files in Part 5!**
+
+<details>
+<summary><b>Click to expand: Generate .pt files from scratch (10-15 minutes)</b></summary>
+
+### Why generate yourself?
+- You modified the pipeline code (text-audio alignment)
+- You want to use different training conversations
+- You want to customize voice samples
+
+### 6.1 Copy Pipeline Script
 
 ```bash
 cp /workspace/personaplex-fine-coffee/runpod_pipeline.py /workspace/
 ```
 
-**Verify:**
-```bash
-ls -lh /workspace/runpod_pipeline.py
-# Should exist and be ~20KB
-```
+### 6.2 Run Pipeline
 
----
-
-## Part 6: Generate .pt Training Files (10 minutes)
-
-### 6.1 Run Pipeline
-
-**Full pipeline (downloads voices + generates TTS + encodes):**
 ```bash
 cd /workspace
 python runpod_pipeline.py
 ```
-
-**Skip steps you've already done:**
-```bash
-# If you already have voices and audio:
-python runpod_pipeline.py --skip-voices --skip-tts
-
-# If you just need to regenerate .pt files:
-python runpod_pipeline.py --skip-conversations --skip-voices --skip-tts
-```
-
-### 6.2 Monitor Progress
 
 **Expected output:**
 ```
 ============================================================
 STEP 1: Download training.json
 ============================================================
-  Already have training.json (200 conversations)
+  Downloading from HuggingFace...
+  ✓ Downloaded training.json (200 conversations)
 
 ============================================================
 STEP 2: Download voice samples
@@ -210,7 +251,6 @@ STEP 3: Generate TTS audio
 ============================================================
   Initializing Chatterbox TTS...
   [1/200] conv_0000: Generating 15 turns...
-  [2/200] conv_0001: Generating 18 turns...
   ...
   ✓ Generated audio for 200 conversations
 
@@ -219,39 +259,25 @@ STEP 4: Encode with Mimi + assemble .pt files
 ============================================================
   Loading Mimi encoder...
   [1/200] conv_0000... 755 frames (60.4s)
-  [2/200] conv_0001... 730 frames (58.4s)
   ...
   ✓ Created 200 .pt files
 
 Done! .pt files saved to /workspace/pt_files/
 ```
 
-### 6.3 Verify .pt Files
-
+**Skip steps if you already have data:**
 ```bash
-ls -lh /workspace/pt_files/*.pt | head -5
-# Should see: conv_0000.pt, conv_0001.pt, etc.
+# Skip voice download (if /workspace/voices/ exists)
+python runpod_pipeline.py --skip-voices
 
-# Count files:
-ls /workspace/pt_files/*.pt | wc -l
-# Should output: 200
+# Skip TTS generation (if /workspace/audio/ exists)
+python runpod_pipeline.py --skip-voices --skip-tts
 
-# Check tensor shape:
-python << 'EOF'
-import torch
-sample = torch.load('/workspace/pt_files/conv_0000.pt')
-print(f"Shape: {sample.shape}")
-print(f"Streams: {sample.shape[0]} (expected: 17)")
-print(f"Frames: {sample.shape[1]}")
-EOF
+# Only regenerate .pt files (if you changed alignment code)
+python runpod_pipeline.py --skip-conversations --skip-voices --skip-tts
 ```
 
-**Expected output:**
-```
-Shape: torch.Size([17, 755])
-Streams: 17 (expected: 17)
-Frames: 755
-```
+</details>
 
 ---
 
@@ -786,17 +812,17 @@ huggingface-cli upload \
 | Launch RunPod | 2 min | 2 min |
 | Part 2: Initial setup | 5 min | 7 min |
 | Part 3: Clone & install | 3 min | 10 min |
-| Part 4: Download data | 2 min | 12 min |
-| Part 5: Copy pipeline | 1 min | 13 min |
-| Part 6: Generate .pt files | 10 min | 23 min |
-| Part 7: Copy training script | 1 min | 24 min |
-| Part 8: Training (semantic-weighted) | 20 min | 44 min |
-| Part 9: Merge | 2 min | 46 min |
-| Part 10-11: Serve & test | 2 min | 48 min |
+| Part 4: Download training.json | 2 min | 12 min |
+| Part 5: Download .pt files | 2 min | 14 min |
+| Part 6: (Optional - skip if using pre-generated) | 0 min | 14 min |
+| Part 7: Copy training script | 1 min | 15 min |
+| Part 8: Training (semantic-weighted) | 20 min | 35 min |
+| Part 9: Merge | 2 min | 37 min |
+| Part 10-11: Serve & test | 2 min | 39 min |
 
-**Total: ~48 minutes from RunPod launch to testing**
+**Total: ~39 minutes from RunPod launch to testing** ⚡
 
-*Note: Removed patch steps - lora_train_fixed.py has fixes built-in*
+*Note: Using pre-generated .pt files saves ~10 minutes vs generating from scratch!*
 
 ---
 
@@ -817,13 +843,17 @@ pip install ./moshi
 pip install chatterbox-tts huggingface_hub sentencepiece peft
 
 # Part 4
-huggingface-cli download AnthrolyticB/personaplex-training-data-test training.json \
+huggingface-cli download AnthrolyticB/personaplex-training-data-v2 training.json \
   --repo-type dataset --local-dir /workspace --force-download
 
-# Part 5-6
-cp /workspace/personaplex-fine-coffee/runpod_pipeline.py /workspace/
-cd /workspace
-python runpod_pipeline.py --skip-voices --skip-tts
+# Part 5 (Download pre-generated .pt files - FAST!)
+huggingface-cli download AnthrolyticB/personaplex-training-data-v2 \
+  --include "pt_files/*.pt" \
+  --repo-type dataset \
+  --local-dir /workspace \
+  --force-download
+
+# Part 6 (Skip - already have .pt files from Part 5)
 
 # Part 7
 cp /workspace/personaplex-fine-coffee/lora_train_fixed.py /workspace/
