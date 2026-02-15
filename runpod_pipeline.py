@@ -412,15 +412,25 @@ def assemble_pt_files():
             if i < T_total:
                 text_tokens[0, i] = token
 
-        # Add conversation text tokens (offset by hybrid_prompt_frames)
+        # Add conversation text tokens (clustered at speech onset - CRITICAL FIX #2)
+        # Based on Moshi research: text represents "inner monologue" before speaking
+        # Tokens should cluster in first 30% of turn, not spread evenly
         for info in text_info:
             token_ids = sp.Encode(info["text"])
             start = info["start_frame"]  # Already includes hybrid_prompt_frames offset
             num_frames = info["num_frames"]
+
+            # Cluster text at onset (first 30% of turn)
+            # This mimics thinking → speaking pattern
+            onset_frames = max(1, int(num_frames * 0.3))
+
             for j, tid in enumerate(token_ids):
-                frame_idx = start + int(j * num_frames / len(token_ids))
-                if frame_idx < T_total:
-                    text_tokens[0, frame_idx] = tid
+                if j < onset_frames:  # Only place tokens in onset window
+                    frame_idx = start + j
+                    if frame_idx < T_total:
+                        text_tokens[0, frame_idx] = tid
+                # Tokens beyond onset window are left as padding (-1)
+                # Model learns: "stop thinking, start speaking"
 
         # Concatenate hybrid prompt audio with conversation audio
         if hybrid_prompt_frames > 0:
