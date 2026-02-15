@@ -337,6 +337,10 @@ def main(args):
         dtype=torch.bfloat16
     )
 
+    # Add missing method for PEFT compatibility (PersonaPlex doesn't have this)
+    if not hasattr(lm, 'prepare_inputs_for_generation'):
+        lm.prepare_inputs_for_generation = lambda *args, **kwargs: {}
+
     # Apply LoRA
     print(f"\n[3/6] Applying LoRA...")
     from peft import get_peft_model, LoraConfig, TaskType
