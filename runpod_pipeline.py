@@ -131,9 +131,13 @@ def download_voices():
         print(f"  Already have {existing_agent} agent + {existing_user} user voices, skipping")
         return
 
+    # Create LibriSpeech download directory
+    libri_dir = Path("/workspace/refs/temp_libri")
+    libri_dir.mkdir(parents=True, exist_ok=True)
+
     print("  Downloading LibriSpeech train-clean-100 (~6GB, cached after first time)...")
     dataset = torchaudio.datasets.LIBRISPEECH(
-        "/workspace/refs/temp_libri", url="train-clean-100", download=True
+        str(libri_dir), url="train-clean-100", download=True
     )
 
     print("  Scanning for diverse speakers...")
