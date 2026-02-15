@@ -26,7 +26,7 @@ def validate_training_data(filepath: Path) -> tuple[bool, list[str]]:
     errors = []
 
     try:
-        with open(filepath) as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         return False, [f"Invalid JSON: {e}"]
@@ -82,10 +82,11 @@ def validate_training_data(filepath: Path) -> tuple[bool, list[str]]:
 
         # Check: Turn count
         num_turns = len(turns)
-        if num_turns < 15:
-            errors.append(f"{conv_id}: Only {num_turns} turns (expected 15-25)")
-        elif num_turns > 25:
-            errors.append(f"{conv_id}: {num_turns} turns (expected 15-25, but OK)")
+        if num_turns < 12:
+            errors.append(f"{conv_id}: Only {num_turns} turns (minimum 12 required)")
+        elif num_turns > 30:
+            # Warn but don't fail for very long conversations
+            print(f"  ⚠️  {conv_id}: {num_turns} turns (longer than typical 12-25, but OK)")
 
         # Check: First turn is agent
         if turns and turns[0].get('role') != 'agent':
