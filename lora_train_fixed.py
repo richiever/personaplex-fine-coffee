@@ -271,6 +271,8 @@ def main(args):
     config = Config()
 
     # Override config with args
+    if args.hf_repo:
+        config.HF_REPO = args.hf_repo
     if args.dataset_repo:
         config.DATASET_REPO = args.dataset_repo
     if args.epochs:
@@ -445,6 +447,8 @@ def merge_lora_weights(args):
     """Merge LoRA weights with base model."""
     config = Config()
 
+    if args.hf_repo:
+        config.HF_REPO = args.hf_repo
     if args.lora_weights:
         config.LORA_WEIGHTS_PATH = args.lora_weights
     if args.lora_rank:
@@ -485,6 +489,9 @@ if __name__ == '__main__':
 
     # Mode
     parser.add_argument('--merge-only', action='store_true', help='Only merge LoRA weights, skip training')
+
+    # Model
+    parser.add_argument('--hf-repo', type=str, help='HuggingFace repo or local path to PersonaPlex model')
 
     # Training
     parser.add_argument('--dataset-repo', type=str, help='Path to .pt files directory')
