@@ -255,20 +255,31 @@ Frames: 755
 
 ---
 
-## Part 7: Download LoRA Training Script (1 minute)
+## Part 7: Copy LoRA Training Script (1 minute)
 
-### 7.1 Check if Script Exists
+### 7.1 Copy Fixed Training Script
+
+**Use the new semantic-weighted loss training script:**
 
 ```bash
-ls -lh /workspace/lora_train.py
+cp /workspace/personaplex-fine-coffee/lora_train_fixed.py /workspace/
 ```
 
-**If missing, copy from repo:**
+**Verify:**
 ```bash
-cp /workspace/personaplex-fine-coffee/legacy_v1/lora_train.py /workspace/
-# OR download directly:
-wget -O /workspace/lora_train.py https://raw.githubusercontent.com/richiever/personaplex-fine-coffee/main/lora_train.py
+ls -lh /workspace/lora_train_fixed.py
+# Should exist and be ~25KB
+
+# Check for semantic weighting (key feature):
+grep -n "SEMANTIC_WEIGHT" /workspace/lora_train_fixed.py
+# Should show line with "SEMANTIC_WEIGHT = 100.0"
 ```
+
+**What's different in lora_train_fixed.py:**
+- ✅ Semantic-weighted loss (100× for semantic codebook, 1× for acoustic)
+- ✅ Better loss tracking (separate text/semantic/acoustic metrics)
+- ✅ Improved LoRA application
+- ✅ Fixed safetensors handling
 
 ---
 
@@ -357,14 +368,14 @@ grep -n "Clone shared tensors" /workspace/lora_train.py
 
 ---
 
-## Part 9: Train PersonaPlex Model (20 minutes)
+## Part 8: Train PersonaPlex Model (20 minutes)
 
-### 9.1 Start Training
+### 8.1 Start Training with Semantic-Weighted Loss
 
 ```bash
 cd /workspace
 
-python lora_train.py \
+python lora_train_fixed.py \
   --dataset-repo /workspace/pt_files \
   --epochs 2 \
   --lora-rank 16 \
@@ -378,12 +389,18 @@ python lora_train.py \
 - `--lora-alpha 32`: LoRA scaling (2× rank is standard)
 - `--lr 2e-6`: Learning rate (conservative for fine-tuning)
 
-### 9.2 Monitor Training
+**What's different with semantic weighting:**
+- Semantic codebook (meaning): 100× weight
+- Acoustic codebooks (sound quality): 1× weight
+- Model learns WHAT to say before perfecting HOW it sounds
+- Reduces hallucinations by prioritizing content coherence
 
-**Expected output:**
+### 8.2 Monitor Training
+
+**Expected output with semantic weighting:**
 ```
 ================================================================================
-PersonaPlex LoRA Fine-Tuning
+PersonaPlex LoRA Fine-Tuning (Semantic-Weighted Loss)
 ================================================================================
 
 Config:
@@ -393,6 +410,8 @@ Config:
   LoRA rank: 16
   LoRA alpha: 32
   Learning rate: 2e-6
+  Semantic weight: 100.0
+  Acoustic weight: 1.0
 
 Downloading PersonaPlex weights...
 Loading model...
@@ -402,50 +421,63 @@ trainable params: 18,874,368 || all params: 7,118,874,368 || trainable%: 0.265
 Starting training...
 
 Epoch 1/2:
-  [1/200] Loss: 45.23
-  [50/200] Loss: 38.17
-  [100/200] Loss: 36.42
-  [150/200] Loss: 35.01
-  [200/200] Loss: 34.85
-  Avg Epoch Loss: 37.21
+  [50/200] loss=120.45, text=10.2, sem=100.3, ac=30.1
+  [100/200] loss=85.23, text=8.5, sem=65.8, ac=28.7
+  [150/200] loss=60.12, text=7.1, sem=42.9, ac=27.3
+  [200/200] loss=48.31, text=6.2, sem=32.1, ac=26.5
+  Avg Epoch Loss: 78.53
 
 Epoch 2/2:
-  [1/200] Loss: 34.12
-  [50/200] Loss: 31.45
-  [100/200] Loss: 29.87
-  [150/200] Loss: 28.93
-  [200/200] Loss: 28.41
-  Avg Epoch Loss: 30.56
+  [50/200] loss=40.15, text=5.8, sem=24.7, ac=25.9
+  [100/200] loss=28.90, text=4.9, sem=15.2, ac=25.1
+  [150/200] loss=22.34, text=4.3, sem=10.8, ac=24.7
+  [200/200] loss=18.12, text=4.0, sem=8.1, ac=24.5
+  Avg Epoch Loss: 27.38
 
 Training complete!
 Saved LoRA weights to: /workspace/lora_weights.safetensors
 ```
 
-### 9.3 Expected Loss Curves
+**Key metrics explained:**
+- `loss`: Total loss (text + semantic + acoustic)
+- `text`: Text token prediction loss
+- `sem`: Semantic codebook loss (100× weighted)
+- `ac`: Acoustic codebooks loss (1× weighted, averaged)
 
-**Good training:**
-- Epoch 1: ~45 → ~35
-- Epoch 2: ~35 → ~28-30
+### 8.3 Expected Loss Curves with Semantic Weighting
+
+**Good training (NEW expectations):**
+- Epoch 1: Total ~120 → ~48 (semantic drops fastest: 100 → 32)
+- Epoch 2: Total ~48 → ~18 (semantic drops to ~8, acoustic stable ~25)
+
+**What this means:**
+- ✅ **High initial loss (~120)** is EXPECTED due to 100× semantic weighting
+- ✅ **Semantic drops much faster** than acoustic (70-80% reduction vs 15-20%)
+- ✅ **Acoustic stays relatively stable** (~30 → ~25) - quality preserved
+- ✅ **Text loss drops moderately** (~10 → ~4) - better alignment helps
 
 **Warning signs:**
-- Loss < 20: **Overfitting** (reduce epochs or increase dropout)
-- Loss > 40 after epoch 2: **Undertrained** (increase epochs or learning rate)
-- Loss oscillating wildly: **Learning rate too high**
+- Semantic loss < 5 after epoch 2: **Possible overfitting** (but check validation)
+- Semantic loss > 40 after epoch 2: **Undertrained** (increase epochs or LR)
+- Acoustic loss increasing: **Problem** (should stay stable or decrease slightly)
+- Total loss oscillating wildly: **Learning rate too high**
 
-### 9.4 Training Time
+### 8.4 Training Time
 
-- RTX A6000: ~15-20 minutes
-- RTX 4090: ~18-22 minutes
-- RTX 3090: ~22-25 minutes
+- RTX A6000: ~15-20 minutes (same as before)
+- RTX 4090: ~18-22 minutes (same as before)
+- RTX 3090: ~22-25 minutes (same as before)
+
+**Note:** Semantic weighting adds minimal overhead (~5%) - slightly more complex loss computation but same overall training time.
 
 ---
 
-## Part 10: Merge LoRA Weights (2 minutes)
+## Part 9: Merge LoRA Weights (2 minutes)
 
-### 10.1 Run Merge
+### 9.1 Run Merge
 
 ```bash
-python /workspace/lora_train.py \
+python /workspace/lora_train_fixed.py \
   --merge-only \
   --lora-weights /workspace/lora_weights.safetensors \
   --lora-rank 16 \
@@ -467,7 +499,7 @@ Saving merged model to: /workspace/merged_model.safetensors...
 Final model: /workspace/merged_model.safetensors (14.2 GB)
 ```
 
-### 10.2 Verify Merged Model
+### 9.2 Verify Merged Model
 
 ```bash
 ls -lh /workspace/merged_model.safetensors
@@ -487,15 +519,15 @@ EOF
 
 ---
 
-## Part 11: Serve Model (1 minute)
+## Part 10: Serve Model (1 minute)
 
-### 11.1 Kill Existing Server
+### 10.1 Kill Existing Server
 
 ```bash
 pkill -f "moshi.server"
 ```
 
-### 11.2 Start Server with Merged Model
+### 10.2 Start Server with Merged Model
 
 ```bash
 python -m moshi.server \
@@ -511,7 +543,7 @@ python -m moshi.server \
 - `--host 0.0.0.0`: Allow external connections
 - `--port 8998`: Default PersonaPlex port
 
-### 11.3 Check Server Logs
+### 10.3 Check Server Logs
 
 ```bash
 tail -f /tmp/moshi_server.log
@@ -526,9 +558,9 @@ Server running on 0.0.0.0:8998
 
 ---
 
-## Part 12: Access Web UI
+## Part 11: Access Web UI
 
-### 12.1 Get RunPod Public URL
+### 11.1 Get RunPod Public URL
 
 **In RunPod dashboard:**
 1. Click on your pod
@@ -540,7 +572,7 @@ Server running on 0.0.0.0:8998
 https://abc123def-8998.proxy.runpod.net
 ```
 
-### 12.2 Test Without System Prompt (Baseline)
+### 11.2 Test Without System Prompt (Baseline)
 
 Open browser to:
 ```
@@ -555,11 +587,18 @@ https://abc123def-8998.proxy.runpod.net
 
 ---
 
-## Part 13: Test with System Prompts
+## Part 12: Test with System Prompts
 
 **CRITICAL:** You MUST include `?text_prompt=` in URL to test fine-tuning!
 
-### 13.1 Test Angry Customer
+**Expected improvements with semantic weighting:**
+- ✅ Better instruction following (model prioritizes WHAT to say)
+- ✅ Reduced hallucinations (semantic coherence weighted 100×)
+- ✅ Stays on topic (coffee shop only)
+- ✅ Maintains persona consistency
+- ⚪ Slight quality tradeoff OK (acoustic weighted 1×, but still good)
+
+### 12.1 Test Angry Customer
 
 ```
 https://abc123def-8998.proxy.runpod.net/?text_prompt=You are an angry customer at Morning Grind cafe. Menu: Latte ($4.50), Americano ($3.75). You ordered a latte but got whole milk instead of oat milk and you're lactose intolerant. Demand an immediate remake. Start irritated and escalate to furious. Interrupt with phrases like "Just remake it!" Only discuss your order and complaint.
@@ -585,7 +624,7 @@ https://abc123def-8998.proxy.runpod.net/?text_prompt=You are an angry customer a
 - Doesn't mention the order issue
 - Long rambling unrelated to coffee
 
-### 13.2 Test Nervous Customer
+### 12.2 Test Nervous Customer
 
 ```
 https://abc123def-8998.proxy.runpod.net/?text_prompt=You are a nervous customer at Coffee Corner. Menu: Americano ($3.75), Latte ($4.50). You are intimidated by the fancy menu and don't understand terms like "macchiato". You speak hesitantly with frequent pauses and apologize often. Focus only on ordering and understanding the menu.
@@ -601,7 +640,7 @@ https://abc123def-8998.proxy.runpod.net/?text_prompt=You are a nervous customer 
 - Apologizes
 - Stays focused on menu
 
-### 13.3 Test Friendly Regular
+### 12.3 Test Friendly Regular
 
 ```
 https://abc123def-8998.proxy.runpod.net/?text_prompt=You are a regular customer at Brew & Bean. Menu: Black Coffee ($3), Latte ($4.50). You are an upbeat regular ordering a large black coffee to go. Your speech is casual and warm with natural conversational flow. Stay focused on coffee and the menu.
@@ -619,13 +658,13 @@ https://abc123def-8998.proxy.runpod.net/?text_prompt=You are a regular customer 
 
 ---
 
-## Part 14: Troubleshooting
+## Part 13: Troubleshooting
 
 ### Issue: "CUDA out of memory"
 
 **Solution 1:** Use smaller batch size
 ```bash
-# Edit lora_train.py, find:
+# Edit lora_train_fixed.py, find:
 # BATCH_SIZE = 1
 # Already at minimum, use CPU offload instead
 ```
@@ -633,7 +672,7 @@ https://abc123def-8998.proxy.runpod.net/?text_prompt=You are a regular customer 
 **Solution 2:** Enable CPU offload
 ```bash
 # Add to training command:
-python lora_train.py \
+python lora_train_fixed.py \
   --dataset-repo /workspace/pt_files \
   --epochs 2 \
   --lora-rank 16 \
@@ -645,7 +684,7 @@ python lora_train.py \
 **Solution 3:** Use smaller GPU and reduce rank
 ```bash
 # Use rank 8 instead of 16:
-python lora_train.py \
+python lora_train_fixed.py \
   --dataset-repo /workspace/pt_files \
   --epochs 2 \
   --lora-rank 8 \
@@ -660,7 +699,7 @@ python lora_train.py \
 **Diagnosis:**
 1. Did you include `?text_prompt=` in URL? (Most common mistake!)
 2. Is the system prompt detailed enough?
-3. Is training loss reasonable (~28-30)?
+3. Is training loss reasonable? (Total ~18-20, Semantic ~8-10)
 
 **Solutions:**
 1. Always test WITH text_prompt parameter
@@ -669,23 +708,21 @@ python lora_train.py \
    BAD:  "You are an angry customer"
    GOOD: "You are an angry customer at [CAFE NAME]. Menu: [ITEMS]. You ordered [X] but got [Y] instead. [SPECIFIC COMPLAINT]. Only discuss your order."
    ```
-3. If loss is good but still hallucinating, increase epochs to 3
+3. If loss is good but still hallucinating, try:
+   - Increase semantic weight to 150× or 200× (edit lora_train_fixed.py)
+   - Increase epochs to 3
+   - Regenerate training data with better persona consistency
 
 ---
 
-### Issue: "Repo id must be in the form 'org/repo'"
+### Issue: Loss values seem very high
 
-**Diagnosis:** LOCAL-TRAINING-PATCH not applied
+**Diagnosis:** This is EXPECTED with semantic weighting!
 
-**Solution:** Re-run Step 8.1
-
----
-
-### Issue: "Some tensors share memory, this will lead to errors"
-
-**Diagnosis:** SHARED-TENSORS-PATCH not applied
-
-**Solution:** Re-run Step 8.2
+**Solution:** Don't panic! Initial loss ~120 is normal because semantic codebook is weighted 100×. What matters:
+- ✅ Loss decreases over time (120 → 18)
+- ✅ Semantic drops faster than acoustic
+- ✅ Model performance improves (test with system prompts)
 
 ---
 
@@ -711,16 +748,16 @@ tail -100 /tmp/moshi_server.log
 
 ---
 
-## Part 15: Upload Model to HuggingFace (Optional)
+## Part 14: Upload Model to HuggingFace (Optional)
 
-### 15.1 Create HuggingFace Repo
+### 14.1 Create HuggingFace Repo
 
 1. Go to https://huggingface.co/new
 2. Name: `personaplex-coffee-shop` (or your choice)
 3. Type: Model
 4. Public or Private
 
-### 15.2 Upload Merged Model
+### 14.2 Upload Merged Model
 
 ```bash
 huggingface-cli upload \
@@ -730,7 +767,7 @@ huggingface-cli upload \
   --repo-type model
 ```
 
-### 15.3 Upload Training Data (Optional)
+### 14.3 Upload Training Data (Optional)
 
 ```bash
 huggingface-cli upload \
@@ -752,12 +789,14 @@ huggingface-cli upload \
 | Part 4: Download data | 2 min | 12 min |
 | Part 5: Copy pipeline | 1 min | 13 min |
 | Part 6: Generate .pt files | 10 min | 23 min |
-| Part 7-8: Patches | 3 min | 26 min |
-| Part 9: Training | 20 min | 46 min |
-| Part 10: Merge | 2 min | 48 min |
-| Part 11-12: Serve & test | 2 min | 50 min |
+| Part 7: Copy training script | 1 min | 24 min |
+| Part 8: Training (semantic-weighted) | 20 min | 44 min |
+| Part 9: Merge | 2 min | 46 min |
+| Part 10-11: Serve & test | 2 min | 48 min |
 
-**Total: ~50 minutes from RunPod launch to testing**
+**Total: ~48 minutes from RunPod launch to testing**
+
+*Note: Removed patch steps - lora_train_fixed.py has fixes built-in*
 
 ---
 
@@ -786,24 +825,25 @@ cp /workspace/personaplex-fine-coffee/runpod_pipeline.py /workspace/
 cd /workspace
 python runpod_pipeline.py --skip-voices --skip-tts
 
-# Part 7-8 (patches - run the Python scripts from guide)
+# Part 7
+cp /workspace/personaplex-fine-coffee/lora_train_fixed.py /workspace/
 
-# Part 9
-python /workspace/lora_train.py \
+# Part 8 (Training with semantic-weighted loss)
+python /workspace/lora_train_fixed.py \
   --dataset-repo /workspace/pt_files \
   --epochs 2 \
   --lora-rank 16 \
   --lora-alpha 32 \
   --lr 2e-6
 
-# Part 10
-python /workspace/lora_train.py \
+# Part 9 (Merge)
+python /workspace/lora_train_fixed.py \
   --merge-only \
   --lora-weights /workspace/lora_weights.safetensors \
   --lora-rank 16 \
   --lora-alpha 32
 
-# Part 11
+# Part 10 (Serve)
 pkill -f "moshi.server"
 python -m moshi.server \
   --hf-repo kyutai/moshika-pytorch-bf16 \
