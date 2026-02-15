@@ -423,16 +423,17 @@ def main(args):
 
     # Save LoRA weights
     print(f"\n[6/6] Saving LoRA weights...")
+
+    # Save using PEFT's method (creates adapter_config.json + weights)
+    lora_dir = "/workspace/lora_adapter"
+    lm.save_pretrained(lora_dir)
+    print(f"  ✓ Saved LoRA adapter to: {lora_dir}")
+
+    # Also save as single file for backup
+    print(f"  ✓ Also saving backup: {config.LORA_WEIGHTS_PATH}")
     from safetensors.torch import save_file
-
-    # Extract LoRA weights
-    state_dict = lm.state_dict()
-
-    # Clone shared tensors (fix safetensors error)
-    state_dict = {k: v.clone() for k, v in state_dict.items()}
-
+    state_dict = {k: v.clone() for k, v in lm.state_dict().items()}
     save_file(state_dict, config.LORA_WEIGHTS_PATH)
-    print(f"  ✓ Saved: {config.LORA_WEIGHTS_PATH}")
 
     print("\n" + "=" * 80)
     print("Training Complete!")
@@ -451,7 +452,11 @@ def merge_lora_weights(args):
     if args.hf_repo:
         config.HF_REPO = args.hf_repo
     if args.lora_weights:
-        config.LORA_WEIGHTS_PATH = args.lora_weights
+        # If user provides a path, use it; otherwise use default directory
+        lora_path = args.lora_weights
+    else:
+        lora_path = "/workspace/lora_adapter"  # Default PEFT directory
+
     if args.lora_rank:
         config.LORA_RANK = args.lora_rank
     if args.lora_alpha:
@@ -466,10 +471,14 @@ def merge_lora_weights(args):
 
     lm = loaders.get_moshi_lm(config.HF_REPO, device='cuda', dtype=torch.bfloat16)
 
-    print(f"\n[2/3] Loading LoRA weights: {config.LORA_WEIGHTS_PATH}...")
+    # Add missing method for PEFT compatibility
+    if not hasattr(lm, 'prepare_inputs_for_generation'):
+        lm.prepare_inputs_for_generation = lambda *args, **kwargs: {}
+
+    print(f"\n[2/3] Loading LoRA adapter: {lora_path}...")
     from peft import PeftModel
 
-    lm = PeftModel.from_pretrained(lm, config.LORA_WEIGHTS_PATH)
+    lm = PeftModel.from_pretrained(lm, lora_path)
 
     print(f"\n[3/3] Merging and saving to: {config.MERGED_MODEL_PATH}...")
     merged_model = lm.merge_and_unload()
@@ -502,7 +511,7 @@ if __name__ == '__main__':
     # LoRA
     parser.add_argument('--lora-rank', type=int, help='LoRA rank')
     parser.add_argument('--lora-alpha', type=int, help='LoRA alpha')
-    parser.add_argument('--lora-weights', type=str, help='Path to LoRA weights (for merging)')
+    parser.add_argument('--lora-weights', type=str, help='Path to LoRA adapter directory (default: /workspace/lora_adapter)')
 
     args = parser.parse_args()
 
