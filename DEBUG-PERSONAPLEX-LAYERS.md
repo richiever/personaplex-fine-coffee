@@ -14,13 +14,14 @@ ValueError: Target modules {'self_attn.v_proj', 'mlp.gate_proj', ...} not found 
 
 ```bash
 python << 'EOF'
+import torch
 from moshi.models import loaders
 
 print("Loading PersonaPlex...")
 lm = loaders.get_moshi_lm(
     '/workspace/personaplex-model/model.safetensors',
     device='cpu',
-    dtype='bfloat16'
+    dtype=torch.bfloat16  # Must be torch dtype, not string!
 )
 
 print("\n" + "=" * 80)
