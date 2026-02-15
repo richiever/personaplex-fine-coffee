@@ -73,8 +73,8 @@ class PersonaPlexDataset(Dataset):
 
     def __getitem__(self, idx):
         codes = torch.load(self.pt_files[idx], weights_only=True)
-        if codes.dim() == 2:
-            codes = codes.unsqueeze(0)  # [17, T] → [1, 17, T]
+        # Don't add batch dimension - DataLoader handles that
+        # Return shape: [17, T] (DataLoader will batch to [B, 17, T])
         return codes
 
 
