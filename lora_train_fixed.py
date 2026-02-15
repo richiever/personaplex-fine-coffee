@@ -348,13 +348,10 @@ def main(args):
         lora_alpha=config.LORA_ALPHA,
         lora_dropout=config.LORA_DROPOUT,
         target_modules=[
-            'self_attn.q_proj',
-            'self_attn.k_proj',
-            'self_attn.v_proj',
-            'self_attn.o_proj',
-            'mlp.gate_proj',
-            'mlp.up_proj',
-            'mlp.down_proj',
+            # PersonaPlex/Moshi architecture (confirmed via layer inspection)
+            'self_attn.out_proj',    # Attention output projection
+            'gating.linear_in',      # Gating network input
+            'gating.linear_out',     # Gating network output
         ]
     )
 
