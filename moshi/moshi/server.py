@@ -223,7 +223,7 @@ class ServerState:
 
                     # Simple Voice Activity Detection (VAD) - detect if user is speaking
                     chunk_rms = np.sqrt(np.mean(chunk**2))
-                    is_user_speaking = chunk_rms > 0.01  # Threshold for speech detection
+                    is_user_speaking = chunk_rms > 0.005  # Threshold for speech detection
 
                     # If waiting for user and they start speaking, stop waiting
                     if self.lm_gen.waiting_for_first_user_input and is_user_speaking:
