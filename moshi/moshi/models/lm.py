@@ -699,6 +699,9 @@ class LMGen(StreamingModule[_LMGenState]):
         self.voice_prompt_embeddings: Optional[torch.Tensor] = None
         #self.voice_prompt_mimi_streaming_state: Optional[StreamingStateDict] = None
 
+        # Flag to wait for user to speak first before agent generates
+        self.waiting_for_first_user_input: bool = False
+
     def _init_streaming_state(self, batch_size: int) -> _LMGenState:
         lm_model = self.lm_model
         initial = lm_model._get_initial_token()
@@ -1119,6 +1122,15 @@ class LMGen(StreamingModule[_LMGenState]):
         await self._step_audio_silence_async(is_alive)
         await self._step_text_prompt_async(is_alive)
         await self._step_audio_silence_async(is_alive)
+
+        # After system prompts, wait for user (barista) to speak first
+        self.waiting_for_first_user_input = True
+        print('System prompts loaded. Waiting for user to speak first...')
+
+    def reset_streaming(self):
+        """Override to reset waiting flag when streaming resets."""
+        super().reset_streaming()
+        self.waiting_for_first_user_input = False
 
     def step_system_prompts(self, mimi):
         self._step_voice_prompt(mimi)
