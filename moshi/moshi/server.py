@@ -203,8 +203,6 @@ class ServerState:
 
         async def opus_loop():
             all_pcm_data = None
-            pending_codes = []
-            suppress_frames = 0
 
             while True:
                 if close:
@@ -236,43 +234,24 @@ class ServerState:
                     codes = self.mimi.encode(chunk)
                     _ = self.other_mimi.encode(chunk)
                     for c in range(codes.shape[-1]):
-                        # Buffer codes while waiting for user to speak
-                        if self.lm_gen.waiting_for_first_user_input:
-                            pending_codes.append(codes[:, :, c: c + 1])
-                            continue
-
-                        # Flush buffered codes once user starts speaking
-                        # Discard all output during flush (contains pre-generated greeting)
-                        if pending_codes:
-                            clog.log("info", f"Flushing {len(pending_codes)} buffered frames")
-                            for buffered in pending_codes:
-                                self.lm_gen.step(buffered)
-                            pending_codes.clear()
-                            suppress_frames = 5  # suppress output while model processes user speech
-                            continue
-
-                        # Suppress initial frames after flush to avoid stale greeting output
-                        if suppress_frames > 0:
-                            self.lm_gen.step(codes[:, :, c: c + 1])
-                            suppress_frames -= 1
-                            continue
-
                         tokens = self.lm_gen.step(codes[:, :, c: c + 1])
                         if tokens is None:
                             continue
                         assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
 
-                        main_pcm = self.mimi.decode(tokens[:, 1:9])
-                        _ = self.other_mimi.decode(tokens[:, 1:9])
-                        main_pcm = main_pcm.cpu()
-                        opus_writer.append_pcm(main_pcm[0, 0].numpy())
+                        # If still waiting for user, suppress all agent output
+                        if not self.lm_gen.waiting_for_first_user_input:
+                            main_pcm = self.mimi.decode(tokens[:, 1:9])
+                            _ = self.other_mimi.decode(tokens[:, 1:9])
+                            main_pcm = main_pcm.cpu()
+                            opus_writer.append_pcm(main_pcm[0, 0].numpy())
 
-                        text_token = tokens[0, 0, 0].item()
-                        if text_token not in (0, 3):
-                            _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
-                            _text = _text.replace("▁", " ")
-                            msg = b"\x02" + bytes(_text, encoding="utf8")
-                            await ws.send_bytes(msg)
+                            text_token = tokens[0, 0, 0].item()
+                            if text_token not in (0, 3):
+                                _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
+                                _text = _text.replace("▁", " ")
+                                msg = b"\x02" + bytes(_text, encoding="utf8")
+                                await ws.send_bytes(msg)
                         else:
                             text_token_map = ['EPAD', 'BOS', 'EOS', 'PAD']
 
