@@ -222,15 +222,6 @@ class ServerState:
                     chunk = all_pcm_data[: self.frame_size]
                     all_pcm_data = all_pcm_data[self.frame_size:]
 
-                    # Simple Voice Activity Detection (VAD) - detect if user is speaking
-                    chunk_rms = np.sqrt(np.mean(chunk**2))
-                    is_user_speaking = chunk_rms > 0.01  # Threshold for speech detection
-
-                    # If waiting for user and they start speaking, stop waiting
-                    if self.lm_gen.waiting_for_first_user_input and is_user_speaking:
-                        self.lm_gen.waiting_for_first_user_input = False
-                        clog.log("info", "User started speaking - agent will now respond")
-
                     chunk = torch.from_numpy(chunk)
                     chunk = chunk.to(device=self.device)[None, None]
                     codes = self.mimi.encode(chunk)
@@ -241,21 +232,17 @@ class ServerState:
                             continue
                         assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
 
-                        # If still waiting for user, suppress all agent output
-                        if not self.lm_gen.waiting_for_first_user_input:
-                            main_pcm = self.mimi.decode(tokens[:, 1:9])
-                            _ = self.other_mimi.decode(tokens[:, 1:9])
-                            main_pcm = main_pcm.cpu()
-                            opus_writer.append_pcm(main_pcm[0, 0].numpy())
+                        main_pcm = self.mimi.decode(tokens[:, 1:9])
+                        _ = self.other_mimi.decode(tokens[:, 1:9])
+                        main_pcm = main_pcm.cpu()
+                        opus_writer.append_pcm(main_pcm[0, 0].numpy())
 
-                            text_token = tokens[0, 0, 0].item()
-                            if text_token not in (0, 3):
-                                _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
-                                _text = _text.replace("▁", " ")
-                                msg = b"\x02" + bytes(_text, encoding="utf8")
-                                await ws.send_bytes(msg)
-                        else:
-                            text_token_map = ['EPAD', 'BOS', 'EOS', 'PAD']
+                        text_token = tokens[0, 0, 0].item()
+                        if text_token not in (0, 3):
+                            _text = self.text_tokenizer.id_to_piece(text_token)  # type: ignore
+                            _text = _text.replace("▁", " ")
+                            msg = b"\x02" + bytes(_text, encoding="utf8")
+                            await ws.send_bytes(msg)
 
         async def send_loop():
             while True:
