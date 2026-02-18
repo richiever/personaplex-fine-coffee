@@ -51,7 +51,7 @@ def main():
 
         # Encode in frames
         all_tokens = []
-        mimi.reset_streaming()
+        mimi.streaming_forever(1)
         for start in range(0, audio_tensor.shape[-1], FRAME_SIZE):
             chunk = audio_tensor[:, :, start:start + FRAME_SIZE]
             if chunk.shape[-1] < FRAME_SIZE:
