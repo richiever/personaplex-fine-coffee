@@ -702,6 +702,10 @@ class LMGen(StreamingModule[_LMGenState]):
         # Flag to wait for user to speak first before agent generates
         self.waiting_for_first_user_input: bool = False
 
+        # Pre-recorded barista greeting to feed as user audio context
+        self.user_voice_prompt_audio: Optional[torch.Tensor] = None
+        self.user_voice_prompt_tokens: Optional[torch.Tensor] = None
+
     def _init_streaming_state(self, batch_size: int) -> _LMGenState:
         lm_model = self.lm_model
         initial = lm_model._get_initial_token()
@@ -960,6 +964,63 @@ class LMGen(StreamingModule[_LMGenState]):
         else:
             return out
 
+    def load_user_voice_prompt(self, path: str):
+        """Load a pre-recorded barista greeting to feed as user audio context.
+
+        Accepts either a .wav file (encoded through Mimi at runtime) or
+        a .pt file of pre-encoded Mimi tokens (no encoding needed).
+        """
+        if path.endswith('.pt'):
+            self.user_voice_prompt_tokens = torch.load(path, map_location=self.lm_model.device)
+            self.user_voice_prompt_audio = None
+            print(f'Loaded user voice prompt tokens: {path} ({self.user_voice_prompt_tokens.shape[0]} frames)')
+        else:
+            raw_audio = load_audio(path, self._sample_rate)
+            raw_audio = normalize_audio(raw_audio, self._sample_rate, -24.0)
+            if raw_audio.ndim == 1:
+                raw_audio = raw_audio[None, :]
+            self.user_voice_prompt_audio = raw_audio
+            self.user_voice_prompt_tokens = None
+            print(f'Loaded user voice prompt audio: {path}')
+
+    def _step_user_voice_prompt_core(self, mimi) -> Iterator[None]:
+        """Feed barista greeting as user audio (input_tokens) with agent silence."""
+        if self.user_voice_prompt_tokens is not None:
+            # Use pre-encoded tokens directly
+            for i in range(self.user_voice_prompt_tokens.shape[0]):
+                yield
+                frame = self.user_voice_prompt_tokens[i].view(1, 8, 1).to(self.lm_model.device)
+                self.step(
+                    input_tokens=frame,
+                    moshi_tokens=self._encode_zero_frame(),
+                    text_token=self.zero_text_code,
+                )
+        elif self.user_voice_prompt_audio is not None:
+            # Encode wav through Mimi at runtime
+            for user_frame_tokens in encode_from_sphn(
+                mimi,
+                _iterate_audio(
+                    self.user_voice_prompt_audio,
+                    sample_interval_size=self._frame_size,
+                    pad=True,
+                ),
+                max_batch=1,
+            ):
+                yield
+                self.step(
+                    input_tokens=user_frame_tokens,
+                    moshi_tokens=self._encode_zero_frame(),
+                    text_token=self.zero_text_code,
+                )
+        else:
+            return
+        print('Done loading user voice prompt.')
+
+    async def _step_user_voice_prompt_async(self, mimi, is_alive: Optional[Callable]=None):
+        for _ in self._step_user_voice_prompt_core(mimi):
+            if is_alive is not None and not await is_alive():
+                break
+
     def load_voice_prompt(self, voice_prompt: str):
         self.voice_prompt = voice_prompt
         raw_audio = load_audio(
@@ -1123,7 +1184,11 @@ class LMGen(StreamingModule[_LMGenState]):
         await self._step_text_prompt_async(is_alive)
         await self._step_audio_silence_async(is_alive)
 
-        # After system prompts, wait for user (barista) to speak first
+        # Feed pre-recorded barista greeting as user audio context
+        await self._step_user_voice_prompt_async(mimi, is_alive)
+        await self._step_audio_silence_async(is_alive)
+
+        # After all prompts, wait for user (barista) to speak first
         self.waiting_for_first_user_input = True
         print('System prompts loaded. Waiting for user to speak first...')
 

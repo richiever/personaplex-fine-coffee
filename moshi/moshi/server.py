@@ -96,7 +96,7 @@ class ServerState:
 
     def __init__(self, mimi: MimiModel, other_mimi: MimiModel, text_tokenizer: sentencepiece.SentencePieceProcessor,
                  lm: LMModel, device: str | torch.device, voice_prompt_dir: str | None = None,
-                 save_voice_prompt_embeddings: bool = False):
+                 save_voice_prompt_embeddings: bool = False, user_voice_prompt: str | None = None):
         self.mimi = mimi
         self.other_mimi = other_mimi
         self.text_tokenizer = text_tokenizer
@@ -110,7 +110,9 @@ class ServerState:
                             frame_rate=self.mimi.frame_rate,
                             save_voice_prompt_embeddings=save_voice_prompt_embeddings,
         )
-        
+        if user_voice_prompt is not None:
+            self.lm_gen.load_user_voice_prompt(user_voice_prompt)
+
         self.lock = asyncio.Lock()
         self.mimi.streaming_forever(1)
         self.other_mimi.streaming_forever(1)
@@ -397,6 +399,11 @@ def main():
         )
     )
     parser.add_argument(
+        "--user-voice-prompt",
+        type=str,
+        help="Path to a pre-recorded barista greeting .wav file to feed as user audio context before conversation starts."
+    )
+    parser.add_argument(
         "--ssl",
         type=str,
         help=(
@@ -467,6 +474,7 @@ def main():
         device=args.device,
         voice_prompt_dir=args.voice_prompt_dir,
         save_voice_prompt_embeddings=False,
+        user_voice_prompt=getattr(args, 'user_voice_prompt', None),
     )
     logger.info("warming up the model")
     state.warmup()
