@@ -204,6 +204,7 @@ class ServerState:
         async def opus_loop():
             all_pcm_data = None
             pending_codes = []
+            suppress_frames = 0
 
             while True:
                 if close:
@@ -241,11 +242,20 @@ class ServerState:
                             continue
 
                         # Flush buffered codes once user starts speaking
+                        # Discard all output during flush (contains pre-generated greeting)
                         if pending_codes:
                             clog.log("info", f"Flushing {len(pending_codes)} buffered frames")
                             for buffered in pending_codes:
                                 self.lm_gen.step(buffered)
                             pending_codes.clear()
+                            suppress_frames = 5  # suppress output while model processes user speech
+                            continue
+
+                        # Suppress initial frames after flush to avoid stale greeting output
+                        if suppress_frames > 0:
+                            self.lm_gen.step(codes[:, :, c: c + 1])
+                            suppress_frames -= 1
+                            continue
 
                         tokens = self.lm_gen.step(codes[:, :, c: c + 1])
                         if tokens is None:
