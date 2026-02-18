@@ -38,7 +38,9 @@ def main():
 
     # Step 2: Encode through Mimi
     print("Loading Mimi encoder...")
-    mimi = loaders.get_mimi(loaders.DEFAULT_REPO, device=device)
+    from huggingface_hub import hf_hub_download
+    mimi_weight = hf_hub_download(loaders.DEFAULT_REPO, loaders.MIMI_NAME)
+    mimi = loaders.get_mimi(mimi_weight, device=device)
     mimi.eval()
 
     with torch.no_grad():
