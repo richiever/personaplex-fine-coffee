@@ -33,10 +33,9 @@ RUN pip install --no-cache-dir \
 # If no secret is provided, model will be downloaded at runtime by start.sh
 RUN --mount=type=secret,id=hf_token,required=false \
     if [ -f /run/secrets/hf_token ]; then \
-        HF_TOKEN=$(cat /run/secrets/hf_token) \
         huggingface-cli download AnthrolyticB/personaplex-coffee-v1 \
             --local-dir /workspace/model \
-            --token "$HF_TOKEN" && \
+            --token "$(cat /run/secrets/hf_token)" && \
         cp /workspace/model/barista_greeting_tokens.pt /workspace/barista_greeting_tokens.pt; \
     else \
         echo "WARNING: hf_token secret not provided, model will be downloaded at runtime"; \
