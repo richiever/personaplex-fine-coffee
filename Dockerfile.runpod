@@ -47,10 +47,6 @@ COPY start.sh ./start.sh
 COPY generate_greeting_tokens.py ./generate_greeting_tokens.py
 RUN chmod +x start.sh
 
-# Copy remaining source files
-COPY data/ ./data/
-COPY assets/ ./assets/
-
 EXPOSE 8998 8888
 
 # start.sh handles: model download (if skipped), greeting token gen, server launch
