@@ -74,10 +74,14 @@ def main():
         print(f"    {frame},")
     print("]")
 
-    # Also save as .pt for convenience
+    # Save as .pt file
     token_tensor = torch.tensor(all_tokens, dtype=torch.long)
-    torch.save(token_tensor, "/workspace/barista_greeting_tokens.pt")
-    print(f"\nSaved to /workspace/barista_greeting_tokens.pt ({token_tensor.shape})")
+    import os
+    save_dir = os.environ.get("GREETING_SAVE_DIR", "/workspace")
+    save_path = os.path.join(save_dir, "barista_greeting_tokens.pt")
+    os.makedirs(save_dir, exist_ok=True)
+    torch.save(token_tensor, save_path)
+    print(f"\nSaved to {save_path} ({token_tensor.shape})")
 
 
 if __name__ == "__main__":
