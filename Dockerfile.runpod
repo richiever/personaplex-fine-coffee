@@ -49,4 +49,4 @@ RUN chmod +x start.sh
 EXPOSE 8998 8888
 
 # start.sh handles: model download (if skipped), greeting token gen, server launch
-CMD ["bash", "start.sh"]
+CMD ["bash", "/workspace/personaplex-fine-coffee/start.sh"]
