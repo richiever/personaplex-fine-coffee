@@ -15,10 +15,10 @@ if [ -z "$HF_TOKEN" ]; then
     exit 1
 fi
 
-# Define paths
-MODEL_DIR="/workspace/model"
-GREETING_TOKENS="/workspace/barista_greeting_tokens.pt"
-REPO_DIR="/workspace/personaplex-fine-coffee"
+# Define paths — use /app (not /workspace, which RunPod overwrites with a volume mount)
+MODEL_DIR="/app/model"
+GREETING_TOKENS="/app/barista_greeting_tokens.pt"
+REPO_DIR="/app"
 
 # Step 1: Download model weights if not present
 if [ ! -f "$MODEL_DIR/model.safetensors" ]; then
@@ -52,7 +52,7 @@ if [ ! -f "$GREETING_TOKENS" ]; then
         echo "      This requires GPU and will take a moment."
 
         cd "$REPO_DIR" || { echo "ERROR: Could not cd to $REPO_DIR"; exit 1; }
-        GREETING_SAVE_DIR="/workspace" python generate_greeting_tokens.py
+        GREETING_SAVE_DIR="/app" python generate_greeting_tokens.py
 
         if [ ! -f "$GREETING_TOKENS" ]; then
             echo "ERROR: Failed to generate greeting tokens!"
@@ -74,8 +74,7 @@ echo "      Model: $MODEL_DIR/model.safetensors"
 echo "      User voice prompt: $GREETING_TOKENS"
 echo ""
 echo "=========================================="
-echo "Server ready! Connect via WebSocket at:"
-echo "ws://<your-runpod-ip>:8998/api/moshi"
+echo "Server starting on port 8998"
 echo "=========================================="
 echo ""
 

@@ -15,7 +15,9 @@ RUN pip uninstall -y torch torchaudio torchvision && \
         torchaudio==2.6.0 \
         torchvision==0.21.0
 
-WORKDIR /workspace/personaplex-fine-coffee
+# Use /app instead of /workspace — RunPod mounts a volume at /workspace
+# which overwrites any files the Docker image placed there
+WORKDIR /app
 
 # Copy moshi package and install editable
 COPY moshi/ ./moshi/
@@ -29,14 +31,13 @@ RUN pip install --no-cache-dir \
 
 # Download model weights + greeting tokens at build time using BuildKit secret mount
 # Build with: docker build --secret id=hf_token,env=HF_TOKEN ...
-# The HF repo includes both model.safetensors and barista_greeting_tokens.pt
-# If no secret is provided, model will be downloaded at runtime by start.sh
+# Model and greeting tokens are stored under /app/model (safe from volume mount)
 RUN --mount=type=secret,id=hf_token,required=false \
     if [ -f /run/secrets/hf_token ]; then \
         huggingface-cli download AnthrolyticB/personaplex-coffee-v1 \
-            --local-dir /workspace/model \
+            --local-dir /app/model \
             --token "$(cat /run/secrets/hf_token)" && \
-        cp /workspace/model/barista_greeting_tokens.pt /workspace/barista_greeting_tokens.pt; \
+        cp /app/model/barista_greeting_tokens.pt /app/barista_greeting_tokens.pt; \
     else \
         echo "WARNING: hf_token secret not provided, model will be downloaded at runtime"; \
     fi
@@ -48,5 +49,4 @@ RUN chmod +x start.sh
 
 EXPOSE 8998 8888
 
-# start.sh handles: model download (if skipped), greeting token gen, server launch
-CMD ["bash", "/workspace/personaplex-fine-coffee/start.sh"]
+CMD ["bash", "/app/start.sh"]
