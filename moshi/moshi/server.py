@@ -52,6 +52,7 @@ from .utils.logging import setup_logger, ColorizedLog
 
 
 logger = setup_logger(__name__)
+_server_ready: bool = False
 DeviceString = Literal["cuda"] | Literal["cpu"] #| Literal["mps"]
 
 def torch_auto_device(requested: Optional[DeviceString] = None) -> torch.device:
@@ -357,6 +358,12 @@ def _get_static_path(static: Optional[str]) -> Optional[str]:
     return None
 
 
+async def handle_ping(request):
+    if _server_ready:
+        return web.Response(status=200, text="OK")
+    return web.Response(status=204)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="localhost", type=str)
@@ -465,8 +472,12 @@ def main():
     )
     logger.info("warming up the model")
     state.warmup()
+    global _server_ready
+    _server_ready = True
+    logger.info("model warmup complete — /ping will return 200")
     app = web.Application()
     app.router.add_get("/api/chat", state.handle_chat)
+    app.router.add_get("/ping", handle_ping)
     if static_path is not None:
         async def handle_root(_):
             return web.FileResponse(os.path.join(static_path, "index.html"))

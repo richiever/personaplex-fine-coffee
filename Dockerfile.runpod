@@ -23,13 +23,11 @@ WORKDIR /app
 COPY moshi/ ./moshi/
 RUN pip install --no-cache-dir -e moshi/
 
-# Additional deps (includes runpod SDK and requests for serverless handler)
+# Additional deps
 RUN pip install --no-cache-dir \
     huggingface_hub \
     sentencepiece \
-    chatterbox-tts \
-    runpod==1.7.13 \
-    requests
+    chatterbox-tts
 
 # Download model weights + greeting tokens at build time using BuildKit secret mount
 # Build with: docker build --secret id=hf_token,env=HF_TOKEN ...
@@ -64,11 +62,6 @@ COPY start.sh ./start.sh
 COPY generate_greeting_tokens.py ./generate_greeting_tokens.py
 RUN chmod +x start.sh
 
-# Copy serverless handler (wraps start.sh, shares IP:port via progress_update)
-COPY serverless_handler.py ./serverless_handler.py
-
 EXPOSE 8998 8888
 
-# Run the serverless handler instead of start.sh directly —
-# the handler launches start.sh as a subprocess and manages the lifecycle
-CMD ["python", "-u", "/app/serverless_handler.py"]
+CMD ["bash", "/app/start.sh"]
