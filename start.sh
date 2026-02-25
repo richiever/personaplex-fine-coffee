@@ -81,6 +81,10 @@ echo ""
 cd "$REPO_DIR" || { echo "ERROR: Could not cd to $REPO_DIR"; exit 1; }
 exec python -m moshi.server \
     --moshi-weight "$MODEL_DIR/model.safetensors" \
+    --mimi-weight /app/codec/tokenizer-e351c8d8-checkpoint125.safetensors \
+    --tokenizer /app/codec/tokenizer_spm_32k_3.model \
+    --voice-prompt-dir /app/codec/voices \
+    --static none \
     --user-voice-prompt "$GREETING_TOKENS" \
     --host 0.0.0.0 \
     --port 8998

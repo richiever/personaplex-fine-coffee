@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir \
     huggingface_hub \
     sentencepiece \
     chatterbox-tts \
-    runpod==1.7.3 \
+    runpod==1.7.13 \
     requests
 
 # Download model weights + greeting tokens at build time using BuildKit secret mount
@@ -44,6 +44,21 @@ RUN --mount=type=secret,id=hf_token,required=false \
         echo "WARNING: hf_token secret not provided, model will be downloaded at runtime"; \
     fi
 
+# Download codec files (Mimi weights, text tokenizer, voice prompts) at build time
+# These come from the base nvidia/personaplex-7b-v1 repo, not the fine-tune
+RUN --mount=type=secret,id=hf_token,required=false \
+    if [ -f /run/secrets/hf_token ]; then \
+        huggingface-cli download nvidia/personaplex-7b-v1 \
+            tokenizer-e351c8d8-checkpoint125.safetensors \
+            tokenizer_spm_32k_3.model \
+            voices.tgz \
+            --local-dir /app/codec \
+            --token "$(cat /run/secrets/hf_token)" && \
+        cd /app/codec && tar xzf voices.tgz && rm voices.tgz; \
+    else \
+        echo "WARNING: codec files will be downloaded at runtime"; \
+    fi
+
 # Copy startup script and greeting token generator
 COPY start.sh ./start.sh
 COPY generate_greeting_tokens.py ./generate_greeting_tokens.py
@@ -56,4 +71,4 @@ EXPOSE 8998 8888
 
 # Run the serverless handler instead of start.sh directly —
 # the handler launches start.sh as a subprocess and manages the lifecycle
-CMD ["python", "/app/serverless_handler.py"]
+CMD ["python", "-u", "/app/serverless_handler.py"]
