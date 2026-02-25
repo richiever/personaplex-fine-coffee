@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir \
     huggingface_hub \
     sentencepiece \
     chatterbox-tts \
-    runpod \
+    runpod==1.7.3 \
     requests
 
 # Download model weights + greeting tokens at build time using BuildKit secret mount
