@@ -53,6 +53,7 @@ from .utils.logging import setup_logger, ColorizedLog
 
 logger = setup_logger(__name__)
 _server_ready: bool = False
+_tunnel_url: str = ""
 DeviceString = Literal["cuda"] | Literal["cpu"] #| Literal["mps"]
 
 def torch_auto_device(requested: Optional[DeviceString] = None) -> torch.device:
@@ -360,7 +361,7 @@ def _get_static_path(static: Optional[str]) -> Optional[str]:
 
 async def handle_ping(request):
     if _server_ready:
-        return web.Response(status=200, text="OK")
+        return web.json_response({"status": "ready", "tunnelUrl": _tunnel_url})
     return web.Response(status=204)
 
 
@@ -472,8 +473,9 @@ def main():
     )
     logger.info("warming up the model")
     state.warmup()
-    global _server_ready
+    global _server_ready, _tunnel_url
     _server_ready = True
+    _tunnel_url = os.environ.get("TUNNEL_URL", "")
     logger.info("model warmup complete — /ping will return 200")
     app = web.Application()
     app.router.add_get("/api/chat", state.handle_chat)

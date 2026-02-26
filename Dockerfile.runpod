@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
  && rm -rf /var/lib/apt/lists/*
 
+# Install cloudflared for quick tunnel (WebSocket passthrough)
+RUN curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+    -o /tmp/cloudflared.deb && dpkg -i /tmp/cloudflared.deb && rm /tmp/cloudflared.deb
+
 # Upgrade torch to 2.6.0 (uninstall stock 2.4 first)
 RUN pip uninstall -y torch torchaudio torchvision && \
     pip install --no-cache-dir \
