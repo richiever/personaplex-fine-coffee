@@ -51,7 +51,7 @@ class Config:
     LORA_DROPOUT = 0.1
 
     # Semantic weighting (CRITICAL FIX #3)
-    SEMANTIC_WEIGHT = 100.0  # Codebook 0
+    SEMANTIC_WEIGHT = 50.0   # Codebook 0 (reduced from 100 for 6x data)
     ACOUSTIC_WEIGHT = 1.0    # Codebooks 1-7
 
     # Paths

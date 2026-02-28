@@ -335,6 +335,15 @@ CATEGORY_TO_MOOD = {
 def build_prompt(persona_id: str, persona: dict, scenario: str, conv_id: str) -> str:
     """Build the prompt for an ollama subagent."""
     mood = CATEGORY_TO_MOOD[persona["category"]]
+    scenario_short = scenario.split("(")[0].strip()
+    traits_short = persona["traits"].split(".")[0]
+
+    system_prompt = (
+        f"<system>You are {persona_id}, {persona['name']}, a customer in a coffee shop. "
+        f"The user is the barista. Agent = customer, user = barista. Stay coffee-shop only. "
+        f"{traits_short}. Scenario: {scenario_short}. "
+        f"Keep strict alternation of turns; the agent speaks first.</system>"
+    )
 
     return f"""You are generating a realistic coffee shop conversation for a training dataset.
 
@@ -343,10 +352,11 @@ CATEGORY: {persona["category"]}
 TRAITS: {persona["traits"]}
 SCENARIO: {scenario}
 
-Generate a conversation between a coffee shop barista (role: "agent") and a customer (role: "user").
+Generate a conversation between a customer (role: "agent") and a barista (role: "user").
+IMPORTANT: agent = CUSTOMER, user = BARISTA.
 
 STRICT RULES:
-1. The FIRST turn MUST be from "agent" (barista greeting the customer)
+1. The FIRST turn MUST be from "agent" (the CUSTOMER initiating)
 2. Turns MUST strictly alternate: agent, user, agent, user, agent, user...
 3. Generate between 14 and 26 turns total (MUST be an even number so it ends on user)
 4. Each turn's text should be 1-3 sentences, natural spoken dialogue
@@ -359,8 +369,10 @@ OUTPUT FORMAT - Return ONLY valid JSON, no other text:
 {{
   "conversation_id": "{conv_id}",
   "persona_id": "{persona_id}",
+  "persona_name": "{persona['name']}",
+  "scenario": "{scenario_short}",
   "mood": "{mood}",
-  "system_prompt": "You are a friendly and professional coffee shop barista. The customer is {persona['name'].lower()} - {persona['traits'][:100]}. Scenario: {scenario.split('(')[0].strip()}.",
+  "system_prompt": "{system_prompt}",
   "turns": [
     {{"role": "agent", "text": "..."}},
     {{"role": "user", "text": "..."}},
@@ -376,9 +388,14 @@ def validate_conversation(conv: dict, conv_id: str) -> tuple[bool, str]:
     if not isinstance(conv, dict):
         return False, "Not a dict"
 
-    for field in ["conversation_id", "persona_id", "mood", "system_prompt", "turns"]:
+    for field in ["conversation_id", "persona_id", "persona_name", "scenario", "mood", "system_prompt", "turns"]:
         if field not in conv:
             return False, f"Missing field: {field}"
+
+    # Ensure system_prompt has <system> tags
+    sp = conv.get("system_prompt", "")
+    if "<system>" not in sp:
+        conv["system_prompt"] = f"<system>{sp}</system>"
 
     turns = conv["turns"]
     if not isinstance(turns, list):
@@ -585,11 +602,12 @@ async def generate_all(
         elapsed = time.time() - start_time
         rate = done / elapsed if elapsed > 0 else 0
         remaining = (len(tasks_list) - done) / rate if rate > 0 else 0
-        print(
-            f"  [{done}/{len(tasks_list)}] {cid}: "
-            f"{'OK' if success else 'FAIL - ' + err[:60]}  "
+        status = "OK" if success else "FAIL - " + err[:60]
+        msg = (
+            f"  [{done}/{len(tasks_list)}] {cid}: {status}  "
             f"({rate:.1f}/min, ETA {remaining:.0f}s)"
         )
+        print(msg.encode("ascii", "replace").decode())
         return result
 
     # Launch all tasks
