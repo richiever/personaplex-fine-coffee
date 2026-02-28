@@ -255,6 +255,62 @@ def download_voices():
 # Step 3: Generate TTS audio
 # ============================================================
 
+def _tts_worker(gpu_id, conv_shard, agent_voices, user_voices, audio_dir, seed):
+    """TTS worker for a single GPU. Runs in a subprocess."""
+    import time as _time
+    import numpy as np
+    from chatterbox.tts import ChatterboxTTS
+
+    device = f"cuda:{gpu_id}"
+    print(f"  [GPU {gpu_id}] Loading ChatterBox TTS...")
+    tts_model = ChatterboxTTS.from_pretrained(device=device)
+
+    rng = random.Random(seed + gpu_id)
+    completed = 0
+    total_turns = sum(len(c["turns"]) for c in conv_shard)
+    start = _time.time()
+
+    for ci, conv in enumerate(conv_shard):
+        conv_id = conv["conversation_id"]
+        agent_voice = str(rng.choice(agent_voices))
+        user_voice = str(rng.choice(user_voices))
+
+        expected_turns = len(conv["turns"])
+        existing = list(audio_dir.glob(f"{conv_id}_turn_*.wav"))
+        if len(existing) >= expected_turns:
+            completed += expected_turns
+            continue
+
+        elapsed = _time.time() - start
+        if completed > 0:
+            rate = elapsed / completed
+            eta = (total_turns - completed) * rate
+            eta_str = f"ETA {eta/3600:.1f}h" if eta > 3600 else f"ETA {eta/60:.0f}m"
+        else:
+            eta_str = "starting..."
+
+        print(f"  [GPU {gpu_id}] [{ci + 1}/{len(conv_shard)}] {conv_id} [{eta_str}]")
+
+        for ti, turn in enumerate(conv["turns"]):
+            out_path = audio_dir / f"{conv_id}_turn_{ti:02d}_{turn['role']}.wav"
+            if out_path.exists():
+                completed += 1
+                continue
+
+            ref = agent_voice if turn["role"] == "agent" else user_voice
+            try:
+                wav = tts_model.generate(turn["text"], audio_prompt_path=ref)
+                sf.write(str(out_path), wav.squeeze(0).cpu().numpy().T, tts_model.sr)
+            except Exception as e:
+                print(f"  [GPU {gpu_id}]   ERROR {conv_id} turn {ti}: {e}")
+                silence = np.zeros((TARGET_SR * 2, 1), dtype=np.float32)
+                sf.write(str(out_path), silence, TARGET_SR)
+            completed += 1
+
+    elapsed = _time.time() - start
+    print(f"  [GPU {gpu_id}] Done! {completed} turns in {elapsed/3600:.1f}h")
+
+
 def generate_tts(retail_only=False):
     import time as _time
 
@@ -262,71 +318,53 @@ def generate_tts(retail_only=False):
     print("STEP 3: Generate audio with Chatterbox TTS")
     print("=" * 60)
 
-    from chatterbox.tts import ChatterboxTTS
-    tts_model = ChatterboxTTS.from_pretrained(device="cuda")
-
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
     agent_voices = sorted(AGENT_VOICE_DIR.glob("*.wav"))
     user_voices = sorted(USER_VOICE_DIR.glob("*.wav"))
     conversations = load_conversations(retail_only=retail_only)
 
+    num_gpus = torch.cuda.device_count()
     print(f"  {len(conversations)} conversations, {len(agent_voices)} agent voices, {len(user_voices)} user voices")
+    print(f"  GPUs available: {num_gpus}")
 
-    random.seed(123)
+    if num_gpus <= 1:
+        # Single GPU path
+        print("  Running single-GPU TTS...")
+        _tts_worker(0, conversations, agent_voices, user_voices, AUDIO_DIR, 123)
+    else:
+        # Multi-GPU: split conversations across GPUs
+        import torch.multiprocessing as mp
+        mp.set_start_method("spawn", force=True)
 
-    # Count total turns for ETA
-    total_turns = sum(len(c["turns"]) for c in conversations)
-    completed_turns = 0
-    tts_start = _time.time()
+        # Split conversations into shards
+        shards = [[] for _ in range(num_gpus)]
+        for i, conv in enumerate(conversations):
+            shards[i % num_gpus].append(conv)
 
-    for ci, conv in enumerate(conversations):
-        conv_id = conv["conversation_id"]
+        print(f"  Splitting {len(conversations)} conversations across {num_gpus} GPUs:")
+        for i, shard in enumerate(shards):
+            print(f"    GPU {i}: {len(shard)} conversations")
 
-        agent_voice = str(random.choice(agent_voices))
-        user_voice = str(random.choice(user_voices))
+        processes = []
+        for gpu_id in range(num_gpus):
+            p = mp.Process(
+                target=_tts_worker,
+                args=(gpu_id, shards[gpu_id], agent_voices, user_voices, AUDIO_DIR, 123),
+            )
+            p.start()
+            processes.append(p)
 
-        expected_turns = len(conv["turns"])
-        existing = list(AUDIO_DIR.glob(f"{conv_id}_turn_*.wav"))
-        if len(existing) >= expected_turns:
-            completed_turns += expected_turns
-            print(f"  [{ci + 1}/{len(conversations)}] {conv_id} — already done, skipping")
-            continue
+        for p in processes:
+            p.join()
 
-        # ETA calculation
-        elapsed = _time.time() - tts_start
-        if completed_turns > 0:
-            rate = elapsed / completed_turns  # seconds per turn
-            remaining_turns = total_turns - completed_turns
-            eta_seconds = remaining_turns * rate
-            eta_str = f"ETA {eta_seconds/3600:.1f}h" if eta_seconds > 3600 else f"ETA {eta_seconds/60:.0f}m"
-        else:
-            eta_str = "ETA calculating..."
+        # Check for failures
+        failed = [i for i, p in enumerate(processes) if p.exitcode != 0]
+        if failed:
+            print(f"  WARNING: GPU workers {failed} exited with errors")
 
-        print(f"  [{ci + 1}/{len(conversations)}] {conv_id} (agent: {Path(agent_voice).name}, user: {Path(user_voice).name}) [{eta_str}]")
-
-        for ti, turn in enumerate(conv["turns"]):
-            out_path = AUDIO_DIR / f"{conv_id}_turn_{ti:02d}_{turn['role']}.wav"
-            if out_path.exists():
-                completed_turns += 1
-                continue
-
-            ref = agent_voice if turn["role"] == "agent" else user_voice
-
-            try:
-                wav = tts_model.generate(turn["text"], audio_prompt_path=ref)
-                sf.write(str(out_path), wav.squeeze(0).cpu().numpy().T, tts_model.sr)
-            except Exception as e:
-                print(f"    ERROR on turn {ti}: {e}")
-                import numpy as np
-                silence = np.zeros((TARGET_SR * 2, 1), dtype=np.float32)
-                sf.write(str(out_path), silence, TARGET_SR)
-
-            completed_turns += 1
-
-    total_elapsed = _time.time() - tts_start
-    print(f"\n  TTS generation complete! {completed_turns} turns in {total_elapsed/3600:.1f}h")
-    print(f"  Audio in {AUDIO_DIR}/")
+    total_audio = len(list(AUDIO_DIR.glob("*.wav")))
+    print(f"\n  TTS generation complete! {total_audio} audio files in {AUDIO_DIR}/")
 
 
 # ============================================================
