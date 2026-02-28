@@ -89,38 +89,80 @@ All 1201 .pt files should be present (conv_0000.pt - conv_1200.pt). The pipeline
 
 Use this after the A40 pipeline has finished and uploaded .pt files to HF, or if you want to re-train later.
 
-### Step 1: H100 Pod — Setup
+### Step 1: H100 Pod — Login to HuggingFace
 
 ```bash
-pip install huggingface_hub moshi peft safetensors torchaudio
+pip install huggingface_hub
+huggingface-cli login
+# Paste your HF token when prompted
+```
+
+### Step 2: H100 Pod — Install dependencies
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install huggingface_hub sentencepiece safetensors peft transformers --upgrade
 
 git clone -b CoffeePlex-Extended-Context https://github.com/richiever/personaplex-fine-coffee /workspace/data
 cd /workspace/data
+
+# IMPORTANT: Install the LOCAL moshi package, NOT pip moshi
+# The pip version has wrong model architecture for PersonaPlex
+pip install -e moshi/
 ```
 
-### Step 2: H100 Pod — Download all PersonaPlex .pt files from HF
+### Step 3: H100 Pod — Download .pt files from HF
+
+```bash
+mkdir -p /workspace/pt_files
+python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id='AnthrolyticB/personaplex-training-data-test',
+    repo_type='dataset',
+    local_dir='/workspace/pt_files',
+    allow_patterns='*.pt'
+)
+"
+```
+
+### Step 4: H100 Pod — Download PersonaPlex model weights
 
 ```bash
 python -c "
 from huggingface_hub import snapshot_download
 snapshot_download(
-    'AnthrolyticB/personaplex-training-data-test',
-    repo_type='dataset',
-    allow_patterns='*.pt',
-    local_dir='/workspace/pt_files',
+    repo_id='nvidia/personaplex-7b-v1',
+    local_dir='/workspace/weights'
 )
 "
 ```
 
-### Step 3: H100 Pod — Train PersonaPlex LoRA
-
-The training script downloads the PersonaPlex-7B base model (nvidia/personaplex-7b-v1) automatically on first run.
+### Step 5: H100 Pod — Train PersonaPlex LoRA
 
 ```bash
 python lora_train_fixed.py --epochs 4 --grad-accum-steps 8
 ```
 
-Expected time: ~45-90 min on H100 (vs ~2-3h on A40).
+Expected time: ~1.5-3 hours on H100.
+
+### Step 6: H100 Pod — Merge LoRA into base model
+
+```bash
+python lora_train_fixed.py --merge-only
+```
+
+### Step 7: H100 Pod — Run server with voice prompt
+
+```bash
+python -m moshi.server \
+  --moshi-weight /workspace/merged_model.safetensors \
+  --voice-prompt-dir /workspace/refs/agent_voices \
+  --host 0.0.0.0 \
+  --gradio-tunnel
+```
+
+The `--gradio-tunnel` flag gives you a public URL to access the web UI from your browser.
 
 ---
 
