@@ -351,13 +351,20 @@ def main(args):
 
     # Load model
     print(f"\n[2/6] Loading PersonaPlex model...")
+    from huggingface_hub import hf_hub_download
     from moshi.models import loaders
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"  Device: {device}")
 
+    # Download weights from HF repo (or use local path if it's a file)
+    moshi_weight = config.HF_REPO
+    if not os.path.isfile(moshi_weight):
+        print(f"  Downloading {loaders.MOSHI_NAME} from {config.HF_REPO}...")
+        moshi_weight = hf_hub_download(config.HF_REPO, loaders.MOSHI_NAME)
+
     lm = loaders.get_moshi_lm(
-        config.HF_REPO,
+        moshi_weight,
         device=device,
         dtype=torch.bfloat16
     )
@@ -516,9 +523,15 @@ def merge_lora_weights(args):
     print("=" * 80)
 
     print(f"\n[1/3] Loading base model: {config.HF_REPO}...")
+    from huggingface_hub import hf_hub_download
     from moshi.models import loaders
 
-    lm = loaders.get_moshi_lm(config.HF_REPO, device='cuda', dtype=torch.bfloat16)
+    moshi_weight = config.HF_REPO
+    if not os.path.isfile(moshi_weight):
+        print(f"  Downloading {loaders.MOSHI_NAME} from {config.HF_REPO}...")
+        moshi_weight = hf_hub_download(config.HF_REPO, loaders.MOSHI_NAME)
+
+    lm = loaders.get_moshi_lm(moshi_weight, device='cuda', dtype=torch.bfloat16)
 
     # Add missing method for PEFT compatibility
     if not hasattr(lm, 'prepare_inputs_for_generation'):
