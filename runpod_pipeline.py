@@ -42,8 +42,8 @@ AGENT_VOICE_DIR = Path("/workspace/refs/agent_voices")
 USER_VOICE_DIR = Path("/workspace/refs/user_voices")
 
 TARGET_SR = 24000
-AGENT_VOICE_COUNT = 1000
-USER_VOICE_COUNT = 1000
+AGENT_VOICE_COUNT = 100
+USER_VOICE_COUNT = 100
 
 # Silence padding (variable per paper section 3.2.2)
 SILENCE_TOKENS = [948, 243, 1178, 546, 1736, 1030, 1978, 2008]
@@ -165,50 +165,24 @@ def download_voices():
     libri_dir = Path("/workspace/refs/temp_libri")
     libri_dir.mkdir(parents=True, exist_ok=True)
 
-    # Download both train-clean-100 (~250 speakers) and train-clean-360 (~920 speakers)
-    # Combined ~1170 unique speakers covers 1000+1000 voices
     print("  Downloading LibriSpeech train-clean-100 (~6GB, cached after first time)...")
-    dataset_100 = torchaudio.datasets.LIBRISPEECH(
+    dataset = torchaudio.datasets.LIBRISPEECH(
         str(libri_dir), url="train-clean-100", download=True
-    )
-
-    print("  Downloading LibriSpeech train-clean-360 (~23GB, cached after first time)...")
-    dataset_360 = torchaudio.datasets.LIBRISPEECH(
-        str(libri_dir), url="train-clean-360", download=True
     )
 
     print("  Scanning for diverse speakers...")
     speakers = {}
-    # Track which dataset + index each speaker's best utterance is in
-    speaker_sources = {}  # speaker_id -> ("100"|"360", idx)
-
-    for i in range(len(dataset_100)):
-        waveform, sr, text, speaker_id, chapter_id, utterance_id = dataset_100[i]
+    for i in range(len(dataset)):
+        waveform, sr, text, speaker_id, chapter_id, utterance_id = dataset[i]
         duration = waveform.shape[1] / sr
 
         if duration < 4.0 or duration > 15.0:
             continue
 
         if speaker_id not in speakers:
-            speakers[speaker_id] = {"best_dur": duration}
-            speaker_sources[speaker_id] = ("100", i)
+            speakers[speaker_id] = {"best_idx": i, "best_dur": duration}
         elif duration > speakers[speaker_id]["best_dur"]:
-            speakers[speaker_id] = {"best_dur": duration}
-            speaker_sources[speaker_id] = ("100", i)
-
-    for i in range(len(dataset_360)):
-        waveform, sr, text, speaker_id, chapter_id, utterance_id = dataset_360[i]
-        duration = waveform.shape[1] / sr
-
-        if duration < 4.0 or duration > 15.0:
-            continue
-
-        if speaker_id not in speakers:
-            speakers[speaker_id] = {"best_dur": duration}
-            speaker_sources[speaker_id] = ("360", i)
-        elif duration > speakers[speaker_id]["best_dur"]:
-            speakers[speaker_id] = {"best_dur": duration}
-            speaker_sources[speaker_id] = ("360", i)
+            speakers[speaker_id] = {"best_idx": i, "best_dur": duration}
 
     print(f"  Found {len(speakers)} unique speakers")
 
@@ -216,12 +190,9 @@ def download_voices():
     random.seed(42)
     random.shuffle(speaker_ids)
 
-    datasets = {"100": dataset_100, "360": dataset_360}
-
     def save_voice(speaker_id, output_path):
-        source, idx = speaker_sources[speaker_id]
-        ds = datasets[source]
-        waveform, sr, text, sid, _, _ = ds[idx]
+        info = speakers[speaker_id]
+        waveform, sr, text, sid, _, _ = dataset[info["best_idx"]]
         if waveform.shape[0] > 1:
             waveform = waveform[0:1]
         if sr != TARGET_SR:
