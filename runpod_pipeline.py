@@ -166,23 +166,28 @@ def download_voices():
     libri_dir.mkdir(parents=True, exist_ok=True)
 
     print("  Downloading LibriSpeech train-clean-100 (~6GB, cached after first time)...")
-    dataset = torchaudio.datasets.LIBRISPEECH(
+    torchaudio.datasets.LIBRISPEECH(
         str(libri_dir), url="train-clean-100", download=True
     )
 
-    print("  Scanning for diverse speakers...")
-    speakers = {}
-    for i in range(len(dataset)):
-        waveform, sr, text, speaker_id, chapter_id, utterance_id = dataset[i]
-        duration = waveform.shape[1] / sr
+    print("  Scanning for diverse speakers (fast file-based scan)...")
+    speakers = {}  # speaker_id -> {"flac_path": path, "best_dur": dur}
+    libri_root = libri_dir / "LibriSpeech" / "train-clean-100"
+    flac_files = sorted(libri_root.glob("*/*/*.flac"))
+    print(f"  Found {len(flac_files)} .flac files, checking durations...")
+    for flac_path in flac_files:
+        # Path format: speaker_id/chapter_id/speaker_id-chapter_id-utterance_id.flac
+        speaker_id = int(flac_path.parent.parent.name)
+        info = torchaudio.info(str(flac_path))
+        duration = info.num_frames / info.sample_rate
 
         if duration < 4.0 or duration > 15.0:
             continue
 
         if speaker_id not in speakers:
-            speakers[speaker_id] = {"best_idx": i, "best_dur": duration}
+            speakers[speaker_id] = {"flac_path": str(flac_path), "best_dur": duration}
         elif duration > speakers[speaker_id]["best_dur"]:
-            speakers[speaker_id] = {"best_idx": i, "best_dur": duration}
+            speakers[speaker_id] = {"flac_path": str(flac_path), "best_dur": duration}
 
     print(f"  Found {len(speakers)} unique speakers")
 
@@ -192,7 +197,7 @@ def download_voices():
 
     def save_voice(speaker_id, output_path):
         info = speakers[speaker_id]
-        waveform, sr, text, sid, _, _ = dataset[info["best_idx"]]
+        waveform, sr = torchaudio.load(info["flac_path"])
         if waveform.shape[0] > 1:
             waveform = waveform[0:1]
         if sr != TARGET_SR:
