@@ -306,7 +306,8 @@ def generate_tts(retail_only=False):
     print(f"  {len(conversations)} conversations, {len(agent_voices)} agent voices, {len(user_voices)} user voices")
     print(f"  GPUs available: {num_gpus}")
 
-    if num_gpus <= 1:
+    # Force single-GPU: multiprocessing spawn causes torchvision registration conflicts
+    if True:
         # Single GPU path
         print("  Running single-GPU TTS...")
         _tts_worker(0, conversations, agent_voices, user_voices, AUDIO_DIR, 123)
