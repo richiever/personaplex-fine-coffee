@@ -53,21 +53,25 @@ def validate_training_data(filepath: Path) -> tuple[bool, list[str]]:
         errors.append(f"{personas['MISSING']} conversations missing 'persona_id'")
 
     num_personas = len([p for p in personas.keys() if p != 'MISSING'])
-    print(f"  ✓ Found {num_personas} unique personas")
+    print(f"  Found {num_personas} unique personas")
 
-    # Warn if not 20 personas × 10 each (but don't fail)
-    expected_personas = 20
-    expected_per_persona = total // expected_personas if total % expected_personas == 0 else None
+    # Flexible persona count validation:
+    #   20 personas = original dataset (200 convs)
+    #   50 personas = retail dataset (1000 convs)
+    #   70 personas = combined dataset (1200 convs)
+    valid_persona_counts = {20, 50, 70}
+    if num_personas not in valid_persona_counts:
+        # Warn but don't fail for unexpected counts
+        print(f"  Note: {num_personas} personas (expected one of {sorted(valid_persona_counts)})")
 
-    if num_personas != expected_personas:
-        errors.append(f"Expected {expected_personas} personas, found {num_personas}")
-
-    if expected_per_persona:
-        for persona_id, count in personas.items():
-            if persona_id == 'MISSING':
-                continue
-            if count != expected_per_persona:
-                errors.append(f"{persona_id}: {count} conversations (expected {expected_per_persona})")
+    # Report per-persona distribution (non-uniform is OK)
+    if num_personas > 0:
+        counts = [c for pid, c in personas.items() if pid != 'MISSING']
+        min_c, max_c = min(counts), max(counts)
+        if min_c != max_c:
+            print(f"  Per-persona range: {min_c}-{max_c} conversations")
+        else:
+            print(f"  Per-persona: {min_c} conversations each")
 
     # Check: Conversation structure
     for i, conv in enumerate(data):
@@ -171,13 +175,15 @@ def upload_to_huggingface(filepath: Path, repo_id: str, token: str = None):
     # Upload file
     print(f"\nUploading {filepath.name} to {repo_id}...")
 
+    # Use the actual filename (training.json or retail_training.json)
+    repo_filename = filepath.name
     try:
         api.upload_file(
             path_or_fileobj=str(filepath),
-            path_in_repo="training.json",
+            path_in_repo=repo_filename,
             repo_id=repo_id,
             repo_type="dataset",
-            commit_message=f"Upload training data ({filepath.stat().st_size // 1024}KB)"
+            commit_message=f"Upload {repo_filename} ({filepath.stat().st_size // 1024}KB)"
         )
         print(f"\n✅ Successfully uploaded to https://huggingface.co/datasets/{repo_id}")
         print(f"\nDownload command:")

@@ -36,13 +36,13 @@ class Config:
     MOSHIKA_REPO = "kyutai/moshika-pytorch-bf16"
 
     # Training
-    EPOCHS = 8
+    EPOCHS = 4  # Reduced for 6x data (1200 conversations)
     LR = 2e-6
     BATCH_SIZE = 1  # PersonaPlex uses batch=1 for stability
     GRAD_CLIP = 1.0
     SEED = 42
-    EARLY_STOP_PATIENCE = 3  # Stop if val loss doesn't improve for N epochs
-    GRAD_ACCUM_STEPS = 4  # Effective batch = BATCH_SIZE * GRAD_ACCUM_STEPS
+    EARLY_STOP_PATIENCE = 2  # Reduced: more data = faster convergence signal
+    GRAD_ACCUM_STEPS = 8  # Increased for larger dataset (effective batch = 8)
     WARMUP_RATIO = 0.1  # Fraction of total steps for LR warmup
 
     # LoRA

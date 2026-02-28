@@ -1,7 +1,7 @@
 """
 Full data pipeline for RunPod:
   1. Download training.json from HuggingFace (single file, array of conversations)
-  2. Download 100 agent + 100 user voice samples from LibriSpeech
+  2. Download 1000 agent + 1000 user voice samples from LibriSpeech
   3. Generate audio with Chatterbox TTS (random voice pairs)
   4. Encode through Mimi + assemble .pt files (variable silence padding)
   5. Upload .pt files to HuggingFace
@@ -9,6 +9,9 @@ Full data pipeline for RunPod:
 Usage:
     pip install chatterbox-tts
     python runpod_pipeline.py
+
+    # Retail-only mode (processes conv_0201-conv_1200):
+    python runpod_pipeline.py --retail-only
 
     # Skip steps you've already done:
     python runpod_pipeline.py --skip-voices --skip-tts
@@ -32,14 +35,15 @@ import soundfile as sf
 
 HF_REPO = "AnthrolyticB/personaplex-training-data-test"
 TRAINING_JSON = Path("/workspace/training.json")
+RETAIL_TRAINING_JSON = Path("/workspace/retail_training.json")
 AUDIO_DIR = Path("/workspace/audio")
 PT_DIR = Path("/workspace/pt_files")
 AGENT_VOICE_DIR = Path("/workspace/refs/agent_voices")
 USER_VOICE_DIR = Path("/workspace/refs/user_voices")
 
 TARGET_SR = 24000
-AGENT_VOICE_COUNT = 100
-USER_VOICE_COUNT = 100
+AGENT_VOICE_COUNT = 1000
+USER_VOICE_COUNT = 1000
 
 # Silence padding (variable per paper section 3.2.2)
 SILENCE_TOKENS = [948, 243, 1178, 546, 1736, 1030, 1978, 2008]
@@ -63,9 +67,14 @@ def detect_mood(system_prompt):
         return "friendly"
 
 
-def load_conversations():
-    """Load all conversations from training.json."""
-    with open(TRAINING_JSON) as f:
+def load_conversations(retail_only=False):
+    """Load conversations from training.json or retail_training.json."""
+    if retail_only:
+        source = RETAIL_TRAINING_JSON
+    else:
+        source = TRAINING_JSON
+
+    with open(source) as f:
         data = json.load(f)
 
     for conv in data:
@@ -87,30 +96,51 @@ def load_conversations():
 # Step 1: Download training.json
 # ============================================================
 
-def download_conversations():
+def download_conversations(retail_only=False):
     from huggingface_hub import HfApi
 
     print("=" * 60)
-    print("STEP 1: Download training.json")
+    print("STEP 1: Download conversation data")
     print("=" * 60)
 
-    if TRAINING_JSON.exists():
+    api = HfApi()
+
+    if retail_only:
+        # Download retail_training.json
+        if RETAIL_TRAINING_JSON.exists():
+            with open(RETAIL_TRAINING_JSON) as f:
+                data = json.load(f)
+            print(f"  Already have retail_training.json ({len(data)} conversations)")
+            return len(data)
+
+        print("  Downloading retail_training.json...")
+        api.hf_hub_download(
+            repo_id=HF_REPO, filename="retail_training.json",
+            repo_type="dataset", local_dir="/workspace",
+        )
+
+        with open(RETAIL_TRAINING_JSON) as f:
+            data = json.load(f)
+        print(f"  {len(data)} retail conversations loaded")
+        return len(data)
+    else:
+        # Download original training.json
+        if TRAINING_JSON.exists():
+            with open(TRAINING_JSON) as f:
+                data = json.load(f)
+            print(f"  Already have training.json ({len(data)} conversations)")
+            return len(data)
+
+        print("  Downloading training.json...")
+        api.hf_hub_download(
+            repo_id=HF_REPO, filename="training.json",
+            repo_type="dataset", local_dir="/workspace",
+        )
+
         with open(TRAINING_JSON) as f:
             data = json.load(f)
-        print(f"  Already have training.json ({len(data)} conversations)")
+        print(f"  {len(data)} conversations loaded")
         return len(data)
-
-    api = HfApi()
-    print("  Downloading training.json...")
-    api.hf_hub_download(
-        repo_id=HF_REPO, filename="training.json",
-        repo_type="dataset", local_dir="/workspace",
-    )
-
-    with open(TRAINING_JSON) as f:
-        data = json.load(f)
-    print(f"  {len(data)} conversations loaded")
-    return len(data)
 
 
 # ============================================================
@@ -135,24 +165,50 @@ def download_voices():
     libri_dir = Path("/workspace/refs/temp_libri")
     libri_dir.mkdir(parents=True, exist_ok=True)
 
+    # Download both train-clean-100 (~250 speakers) and train-clean-360 (~920 speakers)
+    # Combined ~1170 unique speakers covers 1000+1000 voices
     print("  Downloading LibriSpeech train-clean-100 (~6GB, cached after first time)...")
-    dataset = torchaudio.datasets.LIBRISPEECH(
+    dataset_100 = torchaudio.datasets.LIBRISPEECH(
         str(libri_dir), url="train-clean-100", download=True
+    )
+
+    print("  Downloading LibriSpeech train-clean-360 (~23GB, cached after first time)...")
+    dataset_360 = torchaudio.datasets.LIBRISPEECH(
+        str(libri_dir), url="train-clean-360", download=True
     )
 
     print("  Scanning for diverse speakers...")
     speakers = {}
-    for i in range(len(dataset)):
-        waveform, sr, text, speaker_id, chapter_id, utterance_id = dataset[i]
+    # Track which dataset + index each speaker's best utterance is in
+    speaker_sources = {}  # speaker_id -> ("100"|"360", idx)
+
+    for i in range(len(dataset_100)):
+        waveform, sr, text, speaker_id, chapter_id, utterance_id = dataset_100[i]
         duration = waveform.shape[1] / sr
 
         if duration < 4.0 or duration > 15.0:
             continue
 
         if speaker_id not in speakers:
-            speakers[speaker_id] = {"best_idx": i, "best_dur": duration}
+            speakers[speaker_id] = {"best_dur": duration}
+            speaker_sources[speaker_id] = ("100", i)
         elif duration > speakers[speaker_id]["best_dur"]:
-            speakers[speaker_id] = {"best_idx": i, "best_dur": duration}
+            speakers[speaker_id] = {"best_dur": duration}
+            speaker_sources[speaker_id] = ("100", i)
+
+    for i in range(len(dataset_360)):
+        waveform, sr, text, speaker_id, chapter_id, utterance_id = dataset_360[i]
+        duration = waveform.shape[1] / sr
+
+        if duration < 4.0 or duration > 15.0:
+            continue
+
+        if speaker_id not in speakers:
+            speakers[speaker_id] = {"best_dur": duration}
+            speaker_sources[speaker_id] = ("360", i)
+        elif duration > speakers[speaker_id]["best_dur"]:
+            speakers[speaker_id] = {"best_dur": duration}
+            speaker_sources[speaker_id] = ("360", i)
 
     print(f"  Found {len(speakers)} unique speakers")
 
@@ -160,9 +216,12 @@ def download_voices():
     random.seed(42)
     random.shuffle(speaker_ids)
 
+    datasets = {"100": dataset_100, "360": dataset_360}
+
     def save_voice(speaker_id, output_path):
-        info = speakers[speaker_id]
-        waveform, sr, text, sid, _, _ = dataset[info["best_idx"]]
+        source, idx = speaker_sources[speaker_id]
+        ds = datasets[source]
+        waveform, sr, text, sid, _, _ = ds[idx]
         if waveform.shape[0] > 1:
             waveform = waveform[0:1]
         if sr != TARGET_SR:
@@ -196,7 +255,9 @@ def download_voices():
 # Step 3: Generate TTS audio
 # ============================================================
 
-def generate_tts():
+def generate_tts(retail_only=False):
+    import time as _time
+
     print("\n" + "=" * 60)
     print("STEP 3: Generate audio with Chatterbox TTS")
     print("=" * 60)
@@ -208,11 +269,16 @@ def generate_tts():
 
     agent_voices = sorted(AGENT_VOICE_DIR.glob("*.wav"))
     user_voices = sorted(USER_VOICE_DIR.glob("*.wav"))
-    conversations = load_conversations()
+    conversations = load_conversations(retail_only=retail_only)
 
     print(f"  {len(conversations)} conversations, {len(agent_voices)} agent voices, {len(user_voices)} user voices")
 
     random.seed(123)
+
+    # Count total turns for ETA
+    total_turns = sum(len(c["turns"]) for c in conversations)
+    completed_turns = 0
+    tts_start = _time.time()
 
     for ci, conv in enumerate(conversations):
         conv_id = conv["conversation_id"]
@@ -223,14 +289,26 @@ def generate_tts():
         expected_turns = len(conv["turns"])
         existing = list(AUDIO_DIR.glob(f"{conv_id}_turn_*.wav"))
         if len(existing) >= expected_turns:
+            completed_turns += expected_turns
             print(f"  [{ci + 1}/{len(conversations)}] {conv_id} — already done, skipping")
             continue
 
-        print(f"  [{ci + 1}/{len(conversations)}] {conv_id} (agent: {Path(agent_voice).name}, user: {Path(user_voice).name})")
+        # ETA calculation
+        elapsed = _time.time() - tts_start
+        if completed_turns > 0:
+            rate = elapsed / completed_turns  # seconds per turn
+            remaining_turns = total_turns - completed_turns
+            eta_seconds = remaining_turns * rate
+            eta_str = f"ETA {eta_seconds/3600:.1f}h" if eta_seconds > 3600 else f"ETA {eta_seconds/60:.0f}m"
+        else:
+            eta_str = "ETA calculating..."
+
+        print(f"  [{ci + 1}/{len(conversations)}] {conv_id} (agent: {Path(agent_voice).name}, user: {Path(user_voice).name}) [{eta_str}]")
 
         for ti, turn in enumerate(conv["turns"]):
             out_path = AUDIO_DIR / f"{conv_id}_turn_{ti:02d}_{turn['role']}.wav"
             if out_path.exists():
+                completed_turns += 1
                 continue
 
             ref = agent_voice if turn["role"] == "agent" else user_voice
@@ -244,14 +322,18 @@ def generate_tts():
                 silence = np.zeros((TARGET_SR * 2, 1), dtype=np.float32)
                 sf.write(str(out_path), silence, TARGET_SR)
 
-    print(f"\n  TTS generation complete! Audio in {AUDIO_DIR}/")
+            completed_turns += 1
+
+    total_elapsed = _time.time() - tts_start
+    print(f"\n  TTS generation complete! {completed_turns} turns in {total_elapsed/3600:.1f}h")
+    print(f"  Audio in {AUDIO_DIR}/")
 
 
 # ============================================================
 # Step 4: Mimi encode + assemble .pt files
 # ============================================================
 
-def assemble_pt_files():
+def assemble_pt_files(retail_only=False):
     print("\n" + "=" * 60)
     print("STEP 4: Mimi encode + assemble .pt files")
     print("=" * 60)
@@ -270,7 +352,7 @@ def assemble_pt_files():
 
     silence_frame = torch.tensor(SILENCE_TOKENS, dtype=torch.long).unsqueeze(1)
 
-    conversations = load_conversations()
+    conversations = load_conversations(retail_only=retail_only)
     random.seed(456)
 
     for ci, conv in enumerate(conversations):
@@ -473,16 +555,15 @@ def upload_pt_files():
     api = HfApi()
     pt_files = sorted(PT_DIR.glob("*.pt"))
 
-    print(f"  Uploading {len(pt_files)} .pt files to {HF_REPO}...")
+    print(f"  Uploading {len(pt_files)} .pt files to {HF_REPO} (using upload_folder)...")
 
-    for f in pt_files:
-        print(f"  Uploading {f.name}...")
-        api.upload_file(
-            path_or_fileobj=str(f),
-            path_in_repo=f.name,
-            repo_id=HF_REPO,
-            repo_type="dataset",
-        )
+    api.upload_folder(
+        folder_path=str(PT_DIR),
+        repo_id=HF_REPO,
+        repo_type="dataset",
+        allow_patterns="*.pt",
+        commit_message=f"Upload {len(pt_files)} .pt files",
+    )
 
     print(f"\n  Done! {len(pt_files)} files uploaded to {HF_REPO}")
 
@@ -493,6 +574,8 @@ def upload_pt_files():
 
 def main():
     parser = argparse.ArgumentParser(description="Full PersonaPlex data pipeline")
+    parser.add_argument("--retail-only", action="store_true",
+                        help="Process only retail conversations (conv_0201-conv_1200 from retail_training.json)")
     parser.add_argument("--skip-conversations", action="store_true")
     parser.add_argument("--skip-voices", action="store_true")
     parser.add_argument("--skip-tts", action="store_true")
@@ -500,21 +583,26 @@ def main():
     parser.add_argument("--skip-upload", action="store_true")
     args = parser.parse_args()
 
+    if args.retail_only:
+        print("=" * 60)
+        print("RETAIL-ONLY MODE: Processing conv_0201-conv_1200")
+        print("=" * 60)
+
     if not args.skip_conversations:
-        download_conversations()
+        download_conversations(retail_only=args.retail_only)
     if not args.skip_voices:
         download_voices()
     if not args.skip_tts:
-        generate_tts()
+        generate_tts(retail_only=args.retail_only)
     if not args.skip_assemble:
-        assemble_pt_files()
+        assemble_pt_files(retail_only=args.retail_only)
     if not args.skip_upload:
         upload_pt_files()
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")
     print("=" * 60)
-    print("Next: python /workspace/data/lora_train.py --epochs 2 --lora-rank 64 --lora-alpha 128 --lr 5e-6")
+    print("Next: python lora_train_fixed.py --epochs 4 --grad-accum-steps 8")
 
 
 if __name__ == "__main__":
