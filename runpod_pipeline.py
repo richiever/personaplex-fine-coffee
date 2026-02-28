@@ -174,9 +174,11 @@ def download_voices():
     speakers = {}  # speaker_id -> {"flac_path": path, "best_dur": dur}
     libri_root = libri_dir / "LibriSpeech" / "train-clean-100"
     flac_files = sorted(libri_root.glob("*/*/*.flac"))
-    print(f"  Found {len(flac_files)} .flac files, checking durations...")
-    for flac_path in flac_files:
-        # Path format: speaker_id/chapter_id/speaker_id-chapter_id-utterance_id.flac
+    total = len(flac_files)
+    print(f"  Found {total} .flac files, checking durations...")
+    for idx, flac_path in enumerate(flac_files):
+        if idx % 1000 == 0:
+            print(f"    [{idx}/{total}] ({100*idx//total}%)")
         speaker_id = int(flac_path.parent.parent.name)
         info = torchaudio.info(str(flac_path))
         duration = info.num_frames / info.sample_rate
