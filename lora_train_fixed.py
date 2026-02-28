@@ -14,12 +14,15 @@ Based on:
 """
 
 import argparse
+import math
 import os
 import random
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
@@ -33,11 +36,14 @@ class Config:
     MOSHIKA_REPO = "kyutai/moshika-pytorch-bf16"
 
     # Training
-    EPOCHS = 2
+    EPOCHS = 8
     LR = 2e-6
     BATCH_SIZE = 1  # PersonaPlex uses batch=1 for stability
     GRAD_CLIP = 1.0
     SEED = 42
+    EARLY_STOP_PATIENCE = 3  # Stop if val loss doesn't improve for N epochs
+    GRAD_ACCUM_STEPS = 4  # Effective batch = BATCH_SIZE * GRAD_ACCUM_STEPS
+    WARMUP_RATIO = 0.1  # Fraction of total steps for LR warmup
 
     # LoRA
     LORA_RANK = 16  # Sweet spot (32 overfits)
@@ -183,8 +189,8 @@ def compute_semantic_weighted_loss(output, target_codes, config):
 # Training Loop
 # ============================================================
 
-def train_epoch(model, dataloader, optimizer, config, epoch):
-    """Train for one epoch."""
+def train_epoch(model, dataloader, optimizer, config, epoch, scheduler=None):
+    """Train for one epoch with gradient accumulation."""
     model.train()
 
     epoch_metrics = {
@@ -194,7 +200,9 @@ def train_epoch(model, dataloader, optimizer, config, epoch):
         'acoustic': 0.0,
     }
 
+    accum_steps = config.GRAD_ACCUM_STEPS
     progress = tqdm(dataloader, desc=f"Epoch {epoch}/{config.EPOCHS}")
+    optimizer.zero_grad()
 
     for batch_idx, codes in enumerate(progress):
         codes = codes.to('cuda')  # [B, 17, T]
@@ -203,15 +211,18 @@ def train_epoch(model, dataloader, optimizer, config, epoch):
         with torch.amp.autocast("cuda", dtype=torch.bfloat16):
             output = model.forward_train(codes)
             loss, metrics = compute_semantic_weighted_loss(output, codes, config)
+            loss = loss / accum_steps  # Scale loss for accumulation
 
-        # Backward pass
-        optimizer.zero_grad()
+        # Backward pass (accumulate gradients)
         loss.backward()
 
-        # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.GRAD_CLIP)
-
-        optimizer.step()
+        # Step optimizer every accum_steps or at end of epoch
+        if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(dataloader):
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.GRAD_CLIP)
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+            optimizer.zero_grad()
 
         # Accumulate metrics
         for key in epoch_metrics:
@@ -225,11 +236,13 @@ def train_epoch(model, dataloader, optimizer, config, epoch):
         # Update progress bar (every 10 batches)
         if (batch_idx + 1) % 10 == 0:
             avg_metrics = {k: v / (batch_idx + 1) for k, v in epoch_metrics.items()}
+            lr_str = f"{scheduler.get_last_lr()[0]:.2e}" if scheduler else f"{config.LR:.2e}"
             progress.set_postfix({
                 'loss': f"{avg_metrics['total']:.2f}",
                 'text': f"{avg_metrics['text']:.2f}",
                 'sem': f"{avg_metrics['semantic']:.2f}",
                 'ac': f"{avg_metrics['acoustic']:.2f}",
+                'lr': lr_str,
             })
 
     # Return average metrics
@@ -283,6 +296,10 @@ def main(args):
         config.LORA_ALPHA = args.lora_alpha
     if args.lr:
         config.LR = args.lr
+    if args.grad_accum_steps:
+        config.GRAD_ACCUM_STEPS = args.grad_accum_steps
+    if args.early_stop_patience:
+        config.EARLY_STOP_PATIENCE = args.early_stop_patience
 
     # Create output directory
     Path(config.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
@@ -299,6 +316,9 @@ def main(args):
     print(f"  LoRA alpha: {config.LORA_ALPHA}")
     print(f"  Semantic weight: {config.SEMANTIC_WEIGHT}×")
     print(f"  Acoustic weight: {config.ACOUSTIC_WEIGHT}×")
+    print(f"  Grad accum steps: {config.GRAD_ACCUM_STEPS}")
+    print(f"  Early stop patience: {config.EARLY_STOP_PATIENCE}")
+    print(f"  Warmup ratio: {config.WARMUP_RATIO}")
 
     # Set seeds for reproducibility
     random.seed(config.SEED)
@@ -323,6 +343,11 @@ def main(args):
 
     print(f"  Train: {len(train_dataset)} samples")
     print(f"  Val: {len(val_dataset)} samples")
+
+    # Sequence length statistics
+    seq_lengths = [dataset[i].shape[-1] for i in range(len(dataset))]
+    print(f"  Sequence lengths: min={min(seq_lengths)}, max={max(seq_lengths)}, "
+          f"avg={np.mean(seq_lengths):.1f}, std={np.std(seq_lengths):.1f}")
 
     # Load model
     print(f"\n[2/6] Loading PersonaPlex model...")
@@ -353,6 +378,7 @@ def main(args):
         lora_dropout=config.LORA_DROPOUT,
         target_modules=[
             # PersonaPlex/Moshi architecture (confirmed via layer inspection)
+            'self_attn.in_proj',     # Attention K/V/Q projections
             'self_attn.out_proj',    # Attention output projection
             'gating.linear_in',      # Gating network input
             'gating.linear_out',     # Gating network output
@@ -371,11 +397,27 @@ def main(args):
         betas=(0.9, 0.95)
     )
 
+    # LR scheduler: cosine annealing with warmup
+    steps_per_epoch = math.ceil(len(train_loader) / config.GRAD_ACCUM_STEPS)
+    total_steps = steps_per_epoch * config.EPOCHS
+    warmup_steps = int(total_steps * config.WARMUP_RATIO)
+
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            return current_step / max(1, warmup_steps)
+        progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = LambdaLR(optimizer, lr_lambda)
+
+    print(f"\n  LR schedule: {warmup_steps} warmup steps, {total_steps} total steps")
+
     # Training loop
     print(f"\n[5/6] Training...")
     print("=" * 80)
 
     best_val_loss = float('inf')
+    patience_counter = 0
     history = []
 
     for epoch in range(1, config.EPOCHS + 1):
@@ -383,7 +425,7 @@ def main(args):
         print("-" * 80)
 
         # Train
-        train_metrics = train_epoch(lm, train_loader, optimizer, config, epoch)
+        train_metrics = train_epoch(lm, train_loader, optimizer, config, epoch, scheduler)
 
         # Validate
         val_metrics = validate(lm, val_loader, config)
@@ -416,10 +458,17 @@ def main(args):
         }, checkpoint_path)
         print(f"  ✓ Checkpoint: {checkpoint_path}")
 
-        # Save best model
+        # Save best model + early stopping
         if val_metrics['total'] < best_val_loss:
             best_val_loss = val_metrics['total']
+            patience_counter = 0
             print(f"  ✓ New best model! (val_loss: {best_val_loss:.2f})")
+        else:
+            patience_counter += 1
+            print(f"  No improvement ({patience_counter}/{config.EARLY_STOP_PATIENCE})")
+            if patience_counter >= config.EARLY_STOP_PATIENCE:
+                print(f"\n  Early stopping triggered after {epoch} epochs.")
+                break
 
     # Save LoRA weights
     print(f"\n[6/6] Saving LoRA weights...")
@@ -512,6 +561,10 @@ if __name__ == '__main__':
     parser.add_argument('--lora-rank', type=int, help='LoRA rank')
     parser.add_argument('--lora-alpha', type=int, help='LoRA alpha')
     parser.add_argument('--lora-weights', type=str, help='Path to LoRA adapter directory (default: /workspace/lora_adapter)')
+
+    # New training options
+    parser.add_argument('--grad-accum-steps', type=int, help='Gradient accumulation steps (default: 4)')
+    parser.add_argument('--early-stop-patience', type=int, help='Early stopping patience in epochs (default: 3)')
 
     args = parser.parse_args()
 

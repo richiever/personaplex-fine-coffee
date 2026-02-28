@@ -702,6 +702,9 @@ class LMGen(StreamingModule[_LMGenState]):
         # Flag to wait for user to speak first before agent generates
         self.waiting_for_first_user_input: bool = False
 
+        # Context monitoring: track where system prompts end for eviction estimation
+        self._system_prompt_end_offset: int = 0
+
         # Pre-recorded barista greeting to feed as user audio context
         self.user_voice_prompt_audio: Optional[torch.Tensor] = None
         self.user_voice_prompt_tokens: Optional[torch.Tensor] = None
@@ -824,6 +827,17 @@ class LMGen(StreamingModule[_LMGenState]):
         -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         state = self._streaming_state
         lm_model = self.lm_model
+
+        # Context monitoring: log every 375 frames (~30s at 12.5fps)
+        if state.offset > 0 and state.offset % 375 == 0 and self._system_prompt_end_offset > 0:
+            frames_since_prompt = state.offset - self._system_prompt_end_offset
+            frames_remaining = 3000 - frames_since_prompt
+            usage_pct = (frames_since_prompt / 3000) * 100
+            logger.info(
+                "[context] frame=%d | since_prompt=%d | remaining=%d | usage=%.1f%%",
+                state.offset, frames_since_prompt, frames_remaining, usage_pct,
+            )
+
         prepared_inputs = self.prepare_step_input(
             input_tokens, moshi_tokens, text_token,
         )
@@ -1187,6 +1201,10 @@ class LMGen(StreamingModule[_LMGenState]):
         # Feed pre-recorded barista greeting as user audio context
         await self._step_user_voice_prompt_async(mimi, is_alive)
         await self._step_audio_silence_async(is_alive)
+
+        # Record where system prompts end for context monitoring
+        self._system_prompt_end_offset = self._streaming_state.offset
+        logger.info("[context] system prompts ended at frame %d", self._system_prompt_end_offset)
 
         # After all prompts, wait for user (barista) to speak first
         self.waiting_for_first_user_input = True
