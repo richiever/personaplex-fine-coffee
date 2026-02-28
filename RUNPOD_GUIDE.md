@@ -1,4 +1,4 @@
-# RunPod Pipeline Guide
+# PersonaPlex RunPod Pipeline Guide
 
 ## Option A: Full Pipeline (4x A40) + Training (H100)
 
@@ -7,20 +7,23 @@
 ```bash
 apt-get update && apt-get install -y ffmpeg
 
+# moshi package provides the Mimi codec loader used by PersonaPlex
 pip install chatterbox-tts huggingface_hub sentencepiece peft safetensors torchaudio soundfile moshi
 
 git clone -b CoffeePlex-Extended-Context https://github.com/richiever/personaplex-fine-coffee /workspace/data
 cd /workspace/data
 ```
 
-### Step 2: 4x A40 Pod — Download model weights
+### Step 2: 4x A40 Pod — Download PersonaPlex weights
 
 ```bash
 python -c "
 from huggingface_hub import hf_hub_download
 import os
 os.makedirs('/workspace/weights', exist_ok=True)
+# Mimi codec tokenizer (used by PersonaPlex for audio encoding)
 hf_hub_download('kyutai/moshika-pytorch-bf16', 'tokenizer-e351c8d8-checkpoint125.safetensors', local_dir='/workspace/weights')
+# SentencePiece text tokenizer (used by PersonaPlex for text encoding)
 hf_hub_download('kyutai/moshika-pytorch-bf16', 'tokenizer_spm_32k_3.model', local_dir='/workspace/weights')
 "
 ```
@@ -53,13 +56,15 @@ snapshot_download(
 
 ### Step 4: 4x A40 Pod — Run pipeline (conv_0201-conv_1200)
 
-Auto-detects 4 GPUs, splits TTS across them. Downloads retail_training.json from HF, downloads LibriSpeech voices, runs TTS, Mimi encodes, uploads .pt files to HF.
+Auto-detects 4 GPUs, splits ChatterBox TTS across them. Downloads retail_training.json from HF, downloads LibriSpeech voices, runs TTS, encodes through Mimi codec, assembles PersonaPlex .pt training files, uploads to HF.
 
 ```bash
 python runpod_pipeline.py --retail-only
 ```
 
-Expected time: ~6 hours (TTS ~4.3h on 4 GPUs, Mimi ~1.5h, upload ~15min).
+Expected time: ~6 hours (TTS ~4.3h on 4 GPUs, Mimi encode ~1.5h, upload ~15min).
+
+If you disconnect and reconnect, just run the same command again — it skips already-generated .wav and .pt files.
 
 ### Step 5: 4x A40 Pod — Verify
 
@@ -88,13 +93,14 @@ Use this after the A40 pipeline has finished and uploaded .pt files to HF, or if
 ### Step 1: H100 Pod — Setup
 
 ```bash
+# moshi package provides the model loader used by PersonaPlex
 pip install huggingface_hub moshi peft safetensors torchaudio
 
 git clone -b CoffeePlex-Extended-Context https://github.com/richiever/personaplex-fine-coffee /workspace/data
 cd /workspace/data
 ```
 
-### Step 2: H100 Pod — Download all .pt files from HF
+### Step 2: H100 Pod — Download all PersonaPlex .pt files from HF
 
 ```bash
 python -c "
@@ -108,19 +114,9 @@ snapshot_download(
 "
 ```
 
-### Step 3: H100 Pod — Download model weights
+### Step 3: H100 Pod — Train PersonaPlex LoRA
 
-```bash
-python -c "
-from huggingface_hub import hf_hub_download
-import os
-os.makedirs('/workspace/weights', exist_ok=True)
-hf_hub_download('kyutai/moshika-pytorch-bf16', 'tokenizer-e351c8d8-checkpoint125.safetensors', local_dir='/workspace/weights')
-hf_hub_download('kyutai/moshika-pytorch-bf16', 'tokenizer_spm_32k_3.model', local_dir='/workspace/weights')
-"
-```
-
-### Step 4: H100 Pod — Train
+The training script downloads the PersonaPlex-7B base model (nvidia/personaplex-7b-v1) automatically on first run.
 
 ```bash
 python lora_train_fixed.py --epochs 4 --grad-accum-steps 8
@@ -130,16 +126,20 @@ Expected time: ~45-90 min on H100 (vs ~2-3h on A40).
 
 ---
 
-## Config Summary
+## PersonaPlex Training Config
 
 | Parameter | Value | Reason |
 |-----------|-------|--------|
+| Base model | nvidia/personaplex-7b-v1 | PersonaPlex 7B |
 | Epochs | 4 | 6x data vs original 8-epoch run |
 | Grad accum steps | 8 | Larger effective batch for bigger dataset |
 | Early stop patience | 2 | More data = faster convergence signal |
 | Semantic weight | 50x | Reduced from 100x for acoustic stability with 6x data |
-| LoRA rank | 16 | Unchanged |
+| Acoustic weight | 1x | Preserves voice quality |
+| LoRA rank | 16 | Sweet spot (32 overfits) |
+| LoRA alpha | 32 | 2x rank |
 | Learning rate | 2e-6 | Unchanged |
+| LoRA targets | self_attn.in_proj, self_attn.out_proj, gating.linear_in, gating.linear_out | PersonaPlex attention + gating layers |
 
 ## Data Summary
 
@@ -148,3 +148,10 @@ Expected time: ~45-90 min on H100 (vs ~2-3h on A40).
 | Original (coffee shop) | 201 | conv_0000-conv_0200 | training.json |
 | Retail (coffee + general) | 1000 | conv_0201-conv_1200 | retail_training.json |
 | **Total** | **1201** | conv_0000-conv_1200 | All .pt files on HF |
+
+## PersonaPlex .pt File Format
+
+Each .pt file is a tensor of shape `[17, T]` where T = number of frames at 12.5 Hz:
+- Row 0: Text tokens (PersonaPlex inner monologue stream)
+- Rows 1-8: Agent audio codebooks (Mimi codec, 8 codebooks)
+- Rows 9-16: User audio codebooks (Mimi codec, 8 codebooks)
