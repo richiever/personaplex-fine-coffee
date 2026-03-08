@@ -31,6 +31,12 @@ if [ ! -f "$MODEL_DIR/model.safetensors" ]; then
         --local-dir "$MODEL_DIR" \
         --token "$HF_TOKEN"
 
+    echo ""
+    echo "      Downloading model.safetensors from AnthrolyticB/infinisona-v1..."
+    huggingface-cli download AnthrolyticB/infinisona-v1 model.safetensors \
+        --local-dir "$MODEL_DIR" \
+        --token "$HF_TOKEN"
+
     echo "      Model weights downloaded successfully!"
 else
     echo ""

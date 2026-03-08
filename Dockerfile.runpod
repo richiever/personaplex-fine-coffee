@@ -41,6 +41,9 @@ RUN --mount=type=secret,id=hf_token,required=false \
         huggingface-cli download AnthrolyticB/personaplex-coffee-v1 \
             --local-dir /app/model \
             --token "$(cat /run/secrets/hf_token)" && \
+        huggingface-cli download AnthrolyticB/infinisona-v1 model.safetensors \
+            --local-dir /app/model \
+            --token "$(cat /run/secrets/hf_token)" && \
         cp /app/model/barista_greeting_tokens.pt /app/barista_greeting_tokens.pt; \
     else \
         echo "WARNING: hf_token secret not provided, model will be downloaded at runtime"; \
