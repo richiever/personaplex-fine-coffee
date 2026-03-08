@@ -38,7 +38,7 @@ RUN pip install --no-cache-dir \
 # Model and greeting tokens are stored under /app/model (safe from volume mount)
 RUN --mount=type=secret,id=hf_token,required=false \
     if [ -f /run/secrets/hf_token ]; then \
-        huggingface-cli download AnthrolyticB/personaplex-coffee-v1 \
+        huggingface-cli download AnthrolyticB/personaplex-coffee-v1 barista_greeting_tokens.pt \
             --local-dir /app/model \
             --token "$(cat /run/secrets/hf_token)" && \
         huggingface-cli download AnthrolyticB/infinisona-v1 model.safetensors \

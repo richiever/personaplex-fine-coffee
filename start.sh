@@ -27,7 +27,7 @@ if [ ! -f "$MODEL_DIR/model.safetensors" ]; then
     echo "      Repository: AnthrolyticB/personaplex-coffee-v1"
     echo "      Target: $MODEL_DIR"
 
-    huggingface-cli download AnthrolyticB/personaplex-coffee-v1 \
+    huggingface-cli download AnthrolyticB/personaplex-coffee-v1 barista_greeting_tokens.pt \
         --local-dir "$MODEL_DIR" \
         --token "$HF_TOKEN"
 
