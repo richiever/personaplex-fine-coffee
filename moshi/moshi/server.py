@@ -144,6 +144,11 @@ class ServerState:
         peer_port = request.transport.get_extra_info("peername")[1]  # Port
         clog.log("info", f"Incoming connection from {peer}:{peer_port}")
 
+        if self.lock.locked():
+            clog.log("warning", "Worker busy — rejecting connection")
+            await ws.close(code=1008, message=b"Server busy")
+            return ws
+
         # self.lm_gen.temp = float(request.query["audio_temperature"])
         # self.lm_gen.temp_text = float(request.query["text_temperature"])
         # self.lm_gen.top_k_text = max(1, int(request.query["text_topk"]))
