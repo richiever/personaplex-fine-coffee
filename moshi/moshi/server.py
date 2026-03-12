@@ -51,9 +51,12 @@ from .utils.connection import create_ssl_context, get_lan_ip
 from .utils.logging import setup_logger, ColorizedLog
 
 
+import socket
+
 logger = setup_logger(__name__)
 _server_ready: bool = False
 _tunnel_url: str = ""
+WORKER_ID = os.environ.get("RUNPOD_POD_ID", socket.gethostname())
 DeviceString = Literal["cuda"] | Literal["cpu"] #| Literal["mps"]
 
 def torch_auto_device(requested: Optional[DeviceString] = None) -> torch.device:
@@ -116,6 +119,7 @@ class ServerState:
             self.lm_gen.load_user_voice_prompt(user_voice_prompt)
 
         self.lock = asyncio.Lock()
+        self._busy = False
         self.mimi.streaming_forever(1)
         self.other_mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
@@ -144,11 +148,18 @@ class ServerState:
         peer_port = request.transport.get_extra_info("peername")[1]  # Port
         clog.log("info", f"Incoming connection from {peer}:{peer_port}")
 
-        if self.lock.locked():
-            clog.log("warning", "Worker busy — rejecting connection")
+        if self._busy:
+            clog.log("warning", f"[{WORKER_ID}] Worker busy — rejecting connection from {peer}:{peer_port}")
             await ws.close(code=1008, message=b"Server busy")
             return ws
 
+        self._busy = True
+        try:
+            return await self._handle_chat_inner(request, ws, clog, peer, peer_port)
+        finally:
+            self._busy = False
+
+    async def _handle_chat_inner(self, request, ws, clog, peer, peer_port):
         # self.lm_gen.temp = float(request.query["audio_temperature"])
         # self.lm_gen.temp_text = float(request.query["text_temperature"])
         # self.lm_gen.top_k_text = max(1, int(request.query["text_topk"]))
@@ -295,7 +306,7 @@ class ServerState:
             clog.log("info", "done with system prompts")
             # Send the handshake.
             if await is_alive():
-                await ws.send_bytes(b"\x00")
+                await ws.send_bytes(b"\x00" + WORKER_ID.encode("utf-8"))
                 clog.log("info", "sent handshake bytes")
                 # Clean cancellation manager
                 tasks = [
