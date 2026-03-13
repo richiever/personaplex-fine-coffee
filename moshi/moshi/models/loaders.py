@@ -270,6 +270,10 @@ def get_moshi_lm(
 
     model.load_state_dict(state_dict, strict=False, assign=True)
     model.eval()
+    # Weights already moved to target device above; use to_empty() first
+    # to handle any leftover meta tensors from nn.Linear modules (in_proj)
+    if init_device == "meta":
+        return model
     return model.to(device=device, dtype=dtype)
 
 
