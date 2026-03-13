@@ -36,22 +36,22 @@ class Config:
     MOSHIKA_REPO = "kyutai/moshika-pytorch-bf16"
 
     # Training
-    EPOCHS = 4  # Reduced for 6x data (1200 conversations)
-    LR = 2e-6
-    BATCH_SIZE = 1  # PersonaPlex uses batch=1 for stability
+    EPOCHS = 4
+    LR = 1.5e-6
+    BATCH_SIZE = 1
     GRAD_CLIP = 1.0
     SEED = 42
-    EARLY_STOP_PATIENCE = 2  # Reduced: more data = faster convergence signal
-    GRAD_ACCUM_STEPS = 8  # Increased for larger dataset (effective batch = 8)
-    WARMUP_RATIO = 0.1  # Fraction of total steps for LR warmup
+    EARLY_STOP_PATIENCE = 3
+    GRAD_ACCUM_STEPS = 8
+    WARMUP_RATIO = 0.1
 
     # LoRA
-    LORA_RANK = 16  # Sweet spot (32 overfits)
-    LORA_ALPHA = 32  # 2× rank
+    LORA_RANK = 32  # in_proj is fused Q/K/V [12288,4096], rank 32 gives ~10 effective per head
+    LORA_ALPHA = 64  # 2× rank
     LORA_DROPOUT = 0.1
 
     # Semantic weighting (CRITICAL FIX #3)
-    SEMANTIC_WEIGHT = 50.0   # Codebook 0 (reduced from 100 for 6x data)
+    SEMANTIC_WEIGHT = 100.0  # Codebook 0
     ACOUSTIC_WEIGHT = 1.0    # Codebooks 1-7
 
     # Paths
@@ -385,7 +385,7 @@ def main(args):
         lora_dropout=config.LORA_DROPOUT,
         target_modules=[
             # PersonaPlex/Moshi architecture (confirmed via layer inspection)
-            'self_attn.in_proj',     # Attention K/V/Q projections
+            'self_attn.in_proj',     # Fused Q/K/V projection (registered as module)
             'self_attn.out_proj',    # Attention output projection
             'gating.linear_in',      # Gating network input
             'gating.linear_out',     # Gating network output
@@ -394,6 +394,11 @@ def main(args):
 
     lm = get_peft_model(lm, peft_config)
     lm.print_trainable_parameters()
+
+    # Verify in_proj is actually targeted by LoRA
+    in_proj_count = sum(1 for n, _ in lm.named_modules() if 'in_proj' in n and 'lora' in n.lower())
+    print(f"  LoRA applied to {in_proj_count} in_proj modules")
+    assert in_proj_count > 0, "CRITICAL: LoRA not applied to in_proj! Check transformer.py module registration."
 
     # Optimizer
     print(f"\n[4/6] Setting up optimizer...")
@@ -546,7 +551,19 @@ def merge_lora_weights(args):
     merged_model = lm.merge_and_unload()
 
     from safetensors.torch import save_file
-    save_file(merged_model.state_dict(), config.MERGED_MODEL_PATH)
+    state_dict = merged_model.state_dict()
+
+    # Remap in_proj.weight back to in_proj_weight for compatibility with original code
+    compat_state_dict = {}
+    for key, value in state_dict.items():
+        new_key = key
+        if '.self_attn.in_proj.weight' in key:
+            new_key = key.replace('.self_attn.in_proj.weight', '.self_attn.in_proj_weight')
+        if '.self_attn.in_proj.bias' in key:
+            new_key = key.replace('.self_attn.in_proj.bias', '.self_attn.in_proj_bias')
+        compat_state_dict[new_key] = value
+
+    save_file(compat_state_dict, config.MERGED_MODEL_PATH)
 
     print(f"\n✓ Merge complete!")
     print(f"  Final model: {config.MERGED_MODEL_PATH}")

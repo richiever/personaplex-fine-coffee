@@ -250,11 +250,24 @@ def get_moshi_lm(
             if not replaced:
                 print("Missing %s", name)
 
+    # Remap in_proj_weight -> in_proj.weight for main transformer layers
+    # (depformer layers still use in_proj_weight directly)
+    remapped = {}
+    for key, value in list(state_dict.items()):
+        new_key = key
+        if '.self_attn.in_proj_weight' in key and 'depformer' not in key:
+            new_key = key.replace('.self_attn.in_proj_weight', '.self_attn.in_proj.weight')
+        if '.self_attn.in_proj_bias' in key and 'depformer' not in key:
+            new_key = key.replace('.self_attn.in_proj_bias', '.self_attn.in_proj.bias')
+        if new_key != key:
+            remapped[new_key] = state_dict.pop(key)
+    state_dict.update(remapped)
+
     # Assign weights to target device
     dev = torch.device(device) if isinstance(device, str) else device
     for key in state_dict:
         state_dict[key] = state_dict[key].to(device=dev, dtype=dtype)
-    
+
     model.load_state_dict(state_dict, strict=False, assign=True)
     model.eval()
     return model.to(device=device, dtype=dtype)
@@ -327,6 +340,19 @@ def _get_moshi_lm_with_offload(
                     break
             if not replaced:
                 logger.warning(f"Missing {name}")
+
+    # Remap in_proj_weight -> in_proj.weight for main transformer layers
+    # (depformer layers still use in_proj_weight directly)
+    remapped = {}
+    for key, value in list(state_dict.items()):
+        new_key = key
+        if '.self_attn.in_proj_weight' in key and 'depformer' not in key:
+            new_key = key.replace('.self_attn.in_proj_weight', '.self_attn.in_proj.weight')
+        if '.self_attn.in_proj_bias' in key and 'depformer' not in key:
+            new_key = key.replace('.self_attn.in_proj_bias', '.self_attn.in_proj.bias')
+        if new_key != key:
+            remapped[new_key] = state_dict.pop(key)
+    state_dict.update(remapped)
 
     model.load_state_dict(state_dict, strict=False, assign=True)
 
