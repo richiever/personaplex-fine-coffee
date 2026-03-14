@@ -1,13 +1,13 @@
 """
 Full data pipeline for RunPod:
-  1. Download training.json from HuggingFace (single file, array of conversations)
-  2. Download 1000 agent + 1000 user voice samples from LibriSpeech
-  3. Generate audio with Chatterbox TTS (random voice pairs)
-  4. Encode through Mimi + assemble .pt files (variable silence padding)
+  1. Download training.json + retail_training.json from HuggingFace
+  2. Download 100 agent + 100 user voice samples from LibriSpeech
+  3. Generate audio with Chatterbox TTS (random voice pairs, multi-GPU)
+  4. Encode through Mimi + assemble .pt files (LUFS-normalized, barista greeting)
   5. Upload .pt files to HuggingFace
 
 Usage:
-    pip install chatterbox-tts
+    pip install chatterbox-tts pyloudnorm
     python runpod_pipeline.py
 
     # Retail-only mode (processes conv_0201-conv_1200):
@@ -23,6 +23,7 @@ import random
 import os
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
@@ -42,6 +43,7 @@ AGENT_VOICE_DIR = Path("/workspace/refs/agent_voices")
 USER_VOICE_DIR = Path("/workspace/refs/user_voices")
 
 TARGET_SR = 24000
+TARGET_LUFS = -24.0
 AGENT_VOICE_COUNT = 100
 USER_VOICE_COUNT = 100
 
@@ -52,6 +54,20 @@ SINE_TOKENS = [430, 1268, 381, 1611, 1095, 1495, 56, 472]
 # PAD token for agent text during voice/silence phases
 PAD_TOKEN = 3
 ZERO_TOKEN = -1
+
+
+COFFEE_GREETING = "Welcome to the coffee shop, how can I help you?"
+RETAIL_GREETING = "Welcome to the store, how can I help you?"
+
+
+def normalize_audio_lufs(wav: np.ndarray, sr: int, target_lufs: float = TARGET_LUFS) -> np.ndarray:
+    """Normalize mono audio to target LUFS to match inference pipeline."""
+    import pyloudnorm as pyln
+    if wav.ndim == 2 and wav.shape[0] == 1:
+        wav = wav[0]
+    meter = pyln.Meter(sr)
+    loudness = meter.integrated_loudness(wav)
+    return pyln.normalize.loudness(wav, loudness, target_lufs)
 
 
 def detect_mood(system_prompt):
@@ -68,28 +84,56 @@ def detect_mood(system_prompt):
 
 
 def load_conversations(retail_only=False):
-    """Load conversations from training.json or retail_training.json."""
+    """Load conversations from training.json + retail_training.json with barista greetings."""
+    all_data = []
+
     if retail_only:
-        source = RETAIL_TRAINING_JSON
+        # Retail-only mode
+        with open(RETAIL_TRAINING_JSON) as f:
+            retail_data = json.load(f)
+        for conv in retail_data:
+            conv["_source"] = "retail"
+        all_data.extend(retail_data)
     else:
-        source = TRAINING_JSON
+        # Load both coffee shop and retail conversations
+        if TRAINING_JSON.exists():
+            with open(TRAINING_JSON) as f:
+                coffee_data = json.load(f)
+            for conv in coffee_data:
+                conv["_source"] = "coffee"
+            all_data.extend(coffee_data)
+            print(f"  Loaded {len(coffee_data)} coffee shop conversations")
 
-    with open(source) as f:
-        data = json.load(f)
+        if RETAIL_TRAINING_JSON.exists():
+            with open(RETAIL_TRAINING_JSON) as f:
+                retail_data = json.load(f)
+            for conv in retail_data:
+                conv["_source"] = "retail"
+            all_data.extend(retail_data)
+            print(f"  Loaded {len(retail_data)} retail conversations")
 
-    for conv in data:
+    if not all_data:
+        raise FileNotFoundError(f"No training data found at {TRAINING_JSON} or {RETAIL_TRAINING_JSON}")
+
+    for conv in all_data:
         for turn in conv["turns"]:
             turn["role"] = turn["role"].lower()
 
         if "conversation_id" not in conv:
-            idx = data.index(conv)
+            idx = all_data.index(conv)
             conv["conversation_id"] = f"conv_{idx:04d}"
 
         # Auto-detect mood from system_prompt if not explicitly set
         if "mood" not in conv:
             conv["mood"] = detect_mood(conv.get("system_prompt", ""))
 
-    return data
+        # Prepend barista greeting as first user turn
+        if not conv["turns"] or conv["turns"][0].get("_is_greeting"):
+            continue  # Already has greeting
+        greeting_text = COFFEE_GREETING if conv.get("_source") == "coffee" else RETAIL_GREETING
+        conv["turns"].insert(0, {"role": "user", "text": greeting_text, "_is_greeting": True})
+
+    return all_data
 
 
 # ============================================================
@@ -100,47 +144,41 @@ def download_conversations(retail_only=False):
     from huggingface_hub import HfApi
 
     print("=" * 60)
-    print("STEP 1: Download conversation data")
+    print("STEP 1: Download training JSON files")
     print("=" * 60)
 
     api = HfApi()
+    total = 0
 
-    if retail_only:
-        # Download retail_training.json
-        if RETAIL_TRAINING_JSON.exists():
-            with open(RETAIL_TRAINING_JSON) as f:
+    files_to_download = [
+        (RETAIL_TRAINING_JSON, "retail_training.json"),
+    ] if retail_only else [
+        (TRAINING_JSON, "training.json"),
+        (RETAIL_TRAINING_JSON, "retail_training.json"),
+    ]
+
+    for json_path, filename in files_to_download:
+        if json_path.exists():
+            with open(json_path) as f:
                 data = json.load(f)
-            print(f"  Already have retail_training.json ({len(data)} conversations)")
-            return len(data)
+            print(f"  Already have {filename} ({len(data)} conversations)")
+            total += len(data)
+        else:
+            print(f"  Downloading {filename}...")
+            try:
+                api.hf_hub_download(
+                    repo_id=HF_REPO, filename=filename,
+                    repo_type="dataset", local_dir="/workspace",
+                )
+                with open(json_path) as f:
+                    data = json.load(f)
+                print(f"  {len(data)} conversations loaded from {filename}")
+                total += len(data)
+            except Exception as e:
+                print(f"  Warning: Could not download {filename}: {e}")
 
-        print("  Downloading retail_training.json...")
-        api.hf_hub_download(
-            repo_id=HF_REPO, filename="retail_training.json",
-            repo_type="dataset", local_dir="/workspace",
-        )
-
-        with open(RETAIL_TRAINING_JSON) as f:
-            data = json.load(f)
-        print(f"  {len(data)} retail conversations loaded")
-        return len(data)
-    else:
-        # Download original training.json
-        if TRAINING_JSON.exists():
-            with open(TRAINING_JSON) as f:
-                data = json.load(f)
-            print(f"  Already have training.json ({len(data)} conversations)")
-            return len(data)
-
-        print("  Downloading training.json...")
-        api.hf_hub_download(
-            repo_id=HF_REPO, filename="training.json",
-            repo_type="dataset", local_dir="/workspace",
-        )
-
-        with open(TRAINING_JSON) as f:
-            data = json.load(f)
-        print(f"  {len(data)} conversations loaded")
-        return len(data)
+    print(f"  Total: {total} conversations")
+    return total
 
 
 # ============================================================
@@ -407,8 +445,9 @@ def assemble_pt_files(retail_only=False):
             # Encode system prompt text
             system_tokens = sp.Encode(system_prompt)
 
-            # Phase 1: Silence padding before text prompt (~0.5s = 6 frames at 12.5 Hz)
-            pre_silence_frames = 6
+            # Phase 1: Silence padding before text prompt (~0.24s = 3 frames at 12.5 Hz)
+            # Matches inference: audio_silence_frame_cnt=int(0.25*12.5)=3
+            pre_silence_frames = 3
             for _ in range(pre_silence_frames):
                 hybrid_text_tokens.append(PAD_TOKEN)
                 hybrid_agent_audio.append(torch.tensor(SILENCE_TOKENS, dtype=torch.long).unsqueeze(1))
@@ -427,8 +466,8 @@ def assemble_pt_files(retail_only=False):
                 hybrid_agent_audio.append(torch.tensor(SILENCE_TOKENS, dtype=torch.long).unsqueeze(1))
                 hybrid_user_audio.append(torch.tensor(SINE_TOKENS, dtype=torch.long).unsqueeze(1))
 
-            # Phase 3: Silence padding after text prompt (~0.5s = 6 frames)
-            post_silence_frames = 6
+            # Phase 3: Silence padding after text prompt (~0.24s = 3 frames)
+            post_silence_frames = 3
             for _ in range(post_silence_frames):
                 hybrid_text_tokens.append(PAD_TOKEN)
                 hybrid_agent_audio.append(torch.tensor(SILENCE_TOKENS, dtype=torch.long).unsqueeze(1))
@@ -446,6 +485,8 @@ def assemble_pt_files(retail_only=False):
             audio, sr = sf.read(str(wav_path))
             if len(audio.shape) > 1:
                 audio = audio[:, 0]
+            # Normalize audio to -24 LUFS to match inference pipeline
+            audio = normalize_audio_lufs(audio, TARGET_SR, TARGET_LUFS)
             audio_tensor = torch.from_numpy(audio).float().unsqueeze(0).unsqueeze(0).cuda()
 
             with torch.no_grad():
