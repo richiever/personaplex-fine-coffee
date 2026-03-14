@@ -268,6 +268,13 @@ def get_moshi_lm(
         state_dict[key] = state_dict[key].to(device=dev, dtype=dtype)
 
     model.load_state_dict(state_dict, strict=False, assign=True)
+
+    # Re-sync in_proj_weight reference after assign=True replaces tensors
+    for layer in model.transformer.layers:
+        if hasattr(layer.self_attn, 'in_proj'):
+            layer.self_attn.in_proj_weight = layer.self_attn.in_proj.weight
+            layer.self_attn.in_proj_bias = layer.self_attn.in_proj.bias
+
     model.eval()
     return model
 
