@@ -676,6 +676,7 @@ class LMGen(StreamingModule[_LMGenState]):
         self.repetition_penalty = repetition_penalty
         self.repetition_penalty_window = repetition_penalty_window
         self._recent_text_tokens: list[int] = []
+        self._recent_semantic_tokens: list[int] = []
         self.text_prompt_tokens = text_prompt_tokens
         self.audio_silence_frame_cnt = audio_silence_frame_cnt
         self.voice_prompt = None
@@ -1263,14 +1264,32 @@ class LMGen(StreamingModule[_LMGenState]):
                     ret_logits = logits.squeeze(dim=1).squeeze(dim=1)
                     assert ret_logits.shape == (B, lm_model.card), ret_logits.shape
                     depformer_logits.append(ret_logits.float())
+                # Apply repetition penalty to codebook 0 (semantic) to prevent meaning loops
+                if cb_index == 0 and self.repetition_penalty > 1.0 and self._recent_semantic_tokens:
+                    logits_penalized = logits.float().clone()
+                    for tok in self._recent_semantic_tokens[-self.repetition_penalty_window:]:
+                        score = logits_penalized[:, :, :, tok]
+                        logits_penalized[:, :, :, tok] = torch.where(
+                            score > 0, score / self.repetition_penalty, score * self.repetition_penalty
+                        )
+                else:
+                    logits_penalized = logits.float()
+
                 next_token = sample_token(
-                    logits.float(),
+                    logits_penalized,
                     self.use_sampling,
                     self.temp,
                     self.top_k,
                 )
                 assert next_token.shape == (B, 1, 1)
                 next_token = next_token[:, 0, 0]  # shape is B
+
+                # Track semantic tokens for repetition penalty
+                if cb_index == 0:
+                    self._recent_semantic_tokens.append(next_token.item())
+                    if len(self._recent_semantic_tokens) > self.repetition_penalty_window:
+                        self._recent_semantic_tokens = self._recent_semantic_tokens[-self.repetition_penalty_window:]
+
                 prev_token = torch.where(
                     audio_provided[:, cb_index],
                     audio_tokens[:, cb_index],
