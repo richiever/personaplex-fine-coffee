@@ -109,6 +109,8 @@ class ServerState:
                             device=device,
                             frame_rate=self.mimi.frame_rate,
                             save_voice_prompt_embeddings=save_voice_prompt_embeddings,
+                            repetition_penalty=1.3,
+                            repetition_penalty_window=50,
         )
         if user_voice_prompt is not None:
             self.lm_gen.load_user_voice_prompt(user_voice_prompt)

@@ -661,6 +661,8 @@ class LMGen(StreamingModule[_LMGenState]):
         save_voice_prompt_embeddings: bool = False,
         sample_rate: int = 32000,
         frame_rate: int = FRAME_RATE_HZ,
+        repetition_penalty: float = 1.0,
+        repetition_penalty_window: int = 50,
     ):
         assert not lm_model.training, "generation shouldn't be used in training mode."
         super().__init__()
@@ -671,6 +673,9 @@ class LMGen(StreamingModule[_LMGenState]):
         self.temp_text = temp_text
         self.top_k = top_k
         self.top_k_text = top_k_text
+        self.repetition_penalty = repetition_penalty
+        self.repetition_penalty_window = repetition_penalty_window
+        self._recent_text_tokens: list[int] = []
         self.text_prompt_tokens = text_prompt_tokens
         self.audio_silence_frame_cnt = audio_silence_frame_cnt
         self.voice_prompt = None
@@ -899,8 +904,19 @@ class LMGen(StreamingModule[_LMGenState]):
         lm_model = self.lm_model
 
         # Shape of text_logits should be [B, K_text=1, T=1, Card_text]
+        # Apply repetition penalty to discourage token repetition
+        if self.repetition_penalty > 1.0 and self._recent_text_tokens:
+            text_logits_penalized = text_logits.float().clone()
+            for tok in self._recent_text_tokens[-self.repetition_penalty_window:]:
+                score = text_logits_penalized[:, :, :, tok]
+                text_logits_penalized[:, :, :, tok] = torch.where(
+                    score > 0, score / self.repetition_penalty, score * self.repetition_penalty
+                )
+        else:
+            text_logits_penalized = text_logits.float()
+
         sampled_text_token = sample_token(
-            text_logits.float(),
+            text_logits_penalized,
             self.use_sampling,
             self.temp_text,
             self.top_k_text,
@@ -909,6 +925,9 @@ class LMGen(StreamingModule[_LMGenState]):
         assert sampled_text_token.shape[2] == 1
         assert sampled_text_token.shape[1] == 1, "Only one text stream supported."
         sampled_text_token = sampled_text_token[:, 0, 0]  # shape is [B]
+        self._recent_text_tokens.append(sampled_text_token.item())
+        if len(self._recent_text_tokens) > self.repetition_penalty_window:
+            self._recent_text_tokens = self._recent_text_tokens[-self.repetition_penalty_window:]
 
         next_text_token = torch.where(provided_[:, 0, 0], target_[:, 0, 0], sampled_text_token)
 
@@ -1214,6 +1233,7 @@ class LMGen(StreamingModule[_LMGenState]):
         """Override to reset waiting flag when streaming resets."""
         super().reset_streaming()
         self.waiting_for_first_user_input = False
+        self._recent_text_tokens = []
 
     def step_system_prompts(self, mimi):
         self._step_voice_prompt(mimi)
