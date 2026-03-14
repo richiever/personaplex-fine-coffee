@@ -193,11 +193,9 @@ def get_moshi_lm(
             filename, copy_missing_weights, device, dtype, lm_kwargs
         )
 
-    # Init with meta device to avoid init dummy memory
-    init_device = "meta" if filename is not None else device
-    model = LMModel(device=init_device, dtype=dtype, **lm_kwargs)
+    # Init on target device directly to avoid meta tensor issues with nn.Module (in_proj)
+    model = LMModel(device=device, dtype=dtype, **lm_kwargs)
     if filename is None:
-        model.to(device=device, dtype=dtype)
         model.eval()
         return model
 
