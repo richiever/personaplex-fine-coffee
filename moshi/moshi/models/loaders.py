@@ -193,9 +193,11 @@ def get_moshi_lm(
             filename, copy_missing_weights, device, dtype, lm_kwargs
         )
 
-    # Init on target device directly to avoid meta tensor issues with nn.Module (in_proj)
-    model = LMModel(device=device, dtype=dtype, **lm_kwargs)
+    # Init with meta device to avoid init dummy memory
+    init_device = "meta" if filename is not None else device
+    model = LMModel(device=init_device, dtype=dtype, **lm_kwargs)
     if filename is None:
+        model.to(device=device, dtype=dtype)
         model.eval()
         return model
 
@@ -213,20 +215,6 @@ def get_moshi_lm(
         # torch checkpoint
         with open(filename, "rb") as f:
             state_dict = torch.load(f, map_location="cpu")
-    # Remap in_proj_weight -> in_proj.weight for main transformer layers
-    # (depformer layers still use in_proj_weight directly)
-    # Must run before patches so model_sd key lookups match
-    remapped = {}
-    for key, value in list(state_dict.items()):
-        new_key = key
-        if '.self_attn.in_proj_weight' in key and 'depformer' not in key:
-            new_key = key.replace('.self_attn.in_proj_weight', '.self_attn.in_proj.weight')
-        if '.self_attn.in_proj_bias' in key and 'depformer' not in key:
-            new_key = key.replace('.self_attn.in_proj_bias', '.self_attn.in_proj.bias')
-        if new_key != key:
-            remapped[new_key] = state_dict.pop(key)
-    state_dict.update(remapped)
-
     # Patch 1: expand depformer self_attn weights if needed
     model_sd = model.state_dict()
     for name, tensor in list(state_dict.items()):
@@ -266,17 +254,10 @@ def get_moshi_lm(
     dev = torch.device(device) if isinstance(device, str) else device
     for key in state_dict:
         state_dict[key] = state_dict[key].to(device=dev, dtype=dtype)
-
+    
     model.load_state_dict(state_dict, strict=False, assign=True)
-
-    # Re-sync in_proj_weight reference after assign=True replaces tensors
-    for layer in model.transformer.layers:
-        if hasattr(layer.self_attn, 'in_proj'):
-            layer.self_attn.in_proj_weight = layer.self_attn.in_proj.weight
-            layer.self_attn.in_proj_bias = layer.self_attn.in_proj.bias
-
     model.eval()
-    return model
+    return model.to(device=device, dtype=dtype)
 
 
 def _get_moshi_lm_with_offload(
@@ -312,20 +293,6 @@ def _get_moshi_lm_with_offload(
     else:
         with open(filename, "rb") as f:
             state_dict = torch.load(f, map_location="cpu")
-
-    # Remap in_proj_weight -> in_proj.weight for main transformer layers
-    # (depformer layers still use in_proj_weight directly)
-    # Must run before patches so model_sd key lookups match
-    remapped = {}
-    for key, value in list(state_dict.items()):
-        new_key = key
-        if '.self_attn.in_proj_weight' in key and 'depformer' not in key:
-            new_key = key.replace('.self_attn.in_proj_weight', '.self_attn.in_proj.weight')
-        if '.self_attn.in_proj_bias' in key and 'depformer' not in key:
-            new_key = key.replace('.self_attn.in_proj_bias', '.self_attn.in_proj.bias')
-        if new_key != key:
-            remapped[new_key] = state_dict.pop(key)
-    state_dict.update(remapped)
 
     # Apply weight patches (same as non-offload path)
     model_sd = model.state_dict()

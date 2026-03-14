@@ -661,8 +661,6 @@ class LMGen(StreamingModule[_LMGenState]):
         save_voice_prompt_embeddings: bool = False,
         sample_rate: int = 32000,
         frame_rate: int = FRAME_RATE_HZ,
-        repetition_penalty: float = 1.0,
-        repetition_penalty_window: int = 50,
     ):
         assert not lm_model.training, "generation shouldn't be used in training mode."
         super().__init__()
@@ -673,10 +671,6 @@ class LMGen(StreamingModule[_LMGenState]):
         self.temp_text = temp_text
         self.top_k = top_k
         self.top_k_text = top_k_text
-        self.repetition_penalty = repetition_penalty
-        self.repetition_penalty_window = repetition_penalty_window
-        self._recent_text_tokens: list[int] = []
-        self._recent_semantic_tokens: list[int] = []
         self.text_prompt_tokens = text_prompt_tokens
         self.audio_silence_frame_cnt = audio_silence_frame_cnt
         self.voice_prompt = None
@@ -707,9 +701,6 @@ class LMGen(StreamingModule[_LMGenState]):
 
         # Flag to wait for user to speak first before agent generates
         self.waiting_for_first_user_input: bool = False
-
-        # Context monitoring: track where system prompts end for eviction estimation
-        self._system_prompt_end_offset: int = 0
 
         # Pre-recorded barista greeting to feed as user audio context
         self.user_voice_prompt_audio: Optional[torch.Tensor] = None
@@ -833,17 +824,6 @@ class LMGen(StreamingModule[_LMGenState]):
         -> torch.Tensor | tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         state = self._streaming_state
         lm_model = self.lm_model
-
-        # Context monitoring: log every 375 frames (~30s at 12.5fps)
-        if state.offset > 0 and state.offset % 375 == 0 and self._system_prompt_end_offset > 0:
-            frames_since_prompt = state.offset - self._system_prompt_end_offset
-            frames_remaining = 3000 - frames_since_prompt
-            usage_pct = (frames_since_prompt / 3000) * 100
-            logger.info(
-                "[context] frame=%d | since_prompt=%d | remaining=%d | usage=%.1f%%",
-                state.offset, frames_since_prompt, frames_remaining, usage_pct,
-            )
-
         prepared_inputs = self.prepare_step_input(
             input_tokens, moshi_tokens, text_token,
         )
@@ -905,19 +885,8 @@ class LMGen(StreamingModule[_LMGenState]):
         lm_model = self.lm_model
 
         # Shape of text_logits should be [B, K_text=1, T=1, Card_text]
-        # Apply repetition penalty to discourage token repetition
-        if self.repetition_penalty > 1.0 and self._recent_text_tokens:
-            text_logits_penalized = text_logits.float().clone()
-            for tok in self._recent_text_tokens[-self.repetition_penalty_window:]:
-                score = text_logits_penalized[:, :, :, tok]
-                text_logits_penalized[:, :, :, tok] = torch.where(
-                    score > 0, score / self.repetition_penalty, score * self.repetition_penalty
-                )
-        else:
-            text_logits_penalized = text_logits.float()
-
         sampled_text_token = sample_token(
-            text_logits_penalized,
+            text_logits.float(),
             self.use_sampling,
             self.temp_text,
             self.top_k_text,
@@ -926,9 +895,6 @@ class LMGen(StreamingModule[_LMGenState]):
         assert sampled_text_token.shape[2] == 1
         assert sampled_text_token.shape[1] == 1, "Only one text stream supported."
         sampled_text_token = sampled_text_token[:, 0, 0]  # shape is [B]
-        self._recent_text_tokens.append(sampled_text_token.item())
-        if len(self._recent_text_tokens) > self.repetition_penalty_window:
-            self._recent_text_tokens = self._recent_text_tokens[-self.repetition_penalty_window:]
 
         next_text_token = torch.where(provided_[:, 0, 0], target_[:, 0, 0], sampled_text_token)
 
@@ -936,7 +902,6 @@ class LMGen(StreamingModule[_LMGenState]):
             sampled_audio_tokens, audio_logits = state.graphed_depth(next_text_token, transformer_out, target_[:,lm_model.audio_offset:,0], provided_[:,lm_model.audio_offset:,0]) # [B, K_audio, Card_audio]
         else:
             sampled_audio_tokens = state.graphed_depth(next_text_token, transformer_out, target_[:,lm_model.audio_offset:,0], provided_[:,lm_model.audio_offset:,0])
-
 
         state.provided[:, :, model_input_position] = False
         ####
@@ -1223,10 +1188,6 @@ class LMGen(StreamingModule[_LMGenState]):
         await self._step_user_voice_prompt_async(mimi, is_alive)
         await self._step_audio_silence_async(is_alive)
 
-        # Record where system prompts end for context monitoring
-        self._system_prompt_end_offset = self._streaming_state.offset
-        logger.info("[context] system prompts ended at frame %d", self._system_prompt_end_offset)
-
         # After all prompts, wait for user (barista) to speak first
         self.waiting_for_first_user_input = True
         print('System prompts loaded. Waiting for user to speak first...')
@@ -1235,7 +1196,6 @@ class LMGen(StreamingModule[_LMGenState]):
         """Override to reset waiting flag when streaming resets."""
         super().reset_streaming()
         self.waiting_for_first_user_input = False
-        self._recent_text_tokens = []
 
     def step_system_prompts(self, mimi):
         self._step_voice_prompt(mimi)

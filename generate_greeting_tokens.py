@@ -4,18 +4,37 @@ One-time script to generate preset barista greeting tokens.
 Run on RunPod where Mimi and Chatterbox TTS are available:
     python generate_greeting_tokens.py
 
-Outputs the token array to paste into lm.py as BARISTA_GREETING_TOKENS.
+Generates TTS audio, applies LUFS normalization (matching training pipeline),
+encodes through Mimi, and saves tokens for inference.
 """
+import os
 import torch
 import numpy as np
 from moshi.models import loaders
 
-GREETING_TEXT = "Hi, welcome to the coffee shop, what can I get for you?"
+GREETING_TEXT = "Welcome to the coffee shop, how can I help you?"
 SAMPLE_RATE = 24000
+TARGET_LUFS = -24.0
 FRAME_SIZE = 1920  # 24000 / 12.5
+
+
+def normalize_audio_lufs(wav_np, sr, target_lufs=-24.0):
+    """Normalize mono audio to target LUFS (matches training pipeline)."""
+    import pyloudnorm as pyln
+    if wav_np.ndim == 2 and wav_np.shape[0] == 1:
+        wav_np = wav_np[0]
+    if len(wav_np) < int(sr * 0.5):
+        return wav_np
+    meter = pyln.Meter(sr)
+    loudness = meter.integrated_loudness(wav_np)
+    if np.isinf(loudness):
+        return wav_np
+    return pyln.normalize.loudness(wav_np, loudness, target_lufs)
+
 
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    save_dir = os.environ.get("GREETING_SAVE_DIR", "/workspace")
 
     # Step 1: Generate TTS audio
     print("Generating TTS audio...")
@@ -36,7 +55,14 @@ def main():
 
     print(f"Audio shape: {wav.shape}, duration: {wav.shape[-1] / SAMPLE_RATE:.2f}s")
 
-    # Step 2: Encode through Mimi
+    # Step 2: LUFS normalization (matches training pipeline)
+    print(f"Normalizing audio to {TARGET_LUFS} LUFS...")
+    wav_np = wav.squeeze(0).cpu().numpy()
+    wav_np = normalize_audio_lufs(wav_np, SAMPLE_RATE, TARGET_LUFS)
+    wav = torch.from_numpy(wav_np).unsqueeze(0)
+    print(f"Normalized audio shape: {wav.shape}")
+
+    # Step 3: Encode through Mimi
     print("Loading Mimi encoder...")
     from huggingface_hub import hf_hub_download
     mimi_weight = hf_hub_download(loaders.DEFAULT_REPO, loaders.MIMI_NAME)
@@ -65,7 +91,7 @@ def main():
     print(f"\nGenerated {len(all_tokens)} frames of tokens")
     print(f"Duration: {len(all_tokens) / 12.5:.2f}s")
 
-    # Step 3: Output as Python constant
+    # Step 4: Output as Python constant
     print("\n# Paste this into lm.py:")
     print(f"# Barista greeting: \"{GREETING_TEXT}\"")
     print(f"# {len(all_tokens)} frames @ 12.5fps = {len(all_tokens) / 12.5:.2f}s")
@@ -76,8 +102,9 @@ def main():
 
     # Also save as .pt for convenience
     token_tensor = torch.tensor(all_tokens, dtype=torch.long)
-    torch.save(token_tensor, "/workspace/barista_greeting_tokens.pt")
-    print(f"\nSaved to /workspace/barista_greeting_tokens.pt ({token_tensor.shape})")
+    save_path = os.path.join(save_dir, "barista_greeting_tokens.pt")
+    torch.save(token_tensor, save_path)
+    print(f"\nSaved to {save_path} ({token_tensor.shape})")
 
 
 if __name__ == "__main__":

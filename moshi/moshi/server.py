@@ -52,6 +52,8 @@ from .utils.logging import setup_logger, ColorizedLog
 
 
 logger = setup_logger(__name__)
+_server_ready: bool = False
+_tunnel_url: str = ""
 DeviceString = Literal["cuda"] | Literal["cpu"] #| Literal["mps"]
 
 def torch_auto_device(requested: Optional[DeviceString] = None) -> torch.device:
@@ -109,8 +111,6 @@ class ServerState:
                             device=device,
                             frame_rate=self.mimi.frame_rate,
                             save_voice_prompt_embeddings=save_voice_prompt_embeddings,
-                            repetition_penalty=1.5,
-                            repetition_penalty_window=100,
         )
         if user_voice_prompt is not None:
             self.lm_gen.load_user_voice_prompt(user_voice_prompt)
@@ -359,6 +359,12 @@ def _get_static_path(static: Optional[str]) -> Optional[str]:
     return None
 
 
+async def handle_ping(request):
+    if _server_ready:
+        return web.json_response({"status": "ready", "tunnelUrl": _tunnel_url})
+    return web.Response(status=204)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="localhost", type=str)
@@ -467,8 +473,13 @@ def main():
     )
     logger.info("warming up the model")
     state.warmup()
+    global _server_ready, _tunnel_url
+    _server_ready = True
+    _tunnel_url = os.environ.get("TUNNEL_URL", "")
+    logger.info("model warmup complete — /ping will return 200")
     app = web.Application()
     app.router.add_get("/api/chat", state.handle_chat)
+    app.router.add_get("/ping", handle_ping)
     if static_path is not None:
         async def handle_root(_):
             return web.FileResponse(os.path.join(static_path, "index.html"))
