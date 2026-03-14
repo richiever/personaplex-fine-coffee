@@ -65,8 +65,13 @@ def normalize_audio_lufs(wav: np.ndarray, sr: int, target_lufs: float = TARGET_L
     import pyloudnorm as pyln
     if wav.ndim == 2 and wav.shape[0] == 1:
         wav = wav[0]
+    # pyloudnorm requires audio longer than 400ms block size
+    if len(wav) < int(sr * 0.5):
+        return wav
     meter = pyln.Meter(sr)
     loudness = meter.integrated_loudness(wav)
+    if np.isinf(loudness):
+        return wav  # silent audio, skip normalization
     return pyln.normalize.loudness(wav, loudness, target_lufs)
 
 
