@@ -394,6 +394,24 @@ def main(args):
     lm = get_peft_model(lm, peft_config)
     lm.print_trainable_parameters()
 
+    # Unfreeze Q/K/V in first 4 transformer layers for prompt attention
+    # Later layers (4-31) keep frozen Q/K/V to preserve turn-taking
+    early_qkv_layers = 4
+    unfrozen_qkv = 0
+    for name, param in lm.named_parameters():
+        if 'in_proj_weight' in name and 'depformer' not in name:
+            parts = name.split('.')
+            for i, part in enumerate(parts):
+                if part == 'layers' and i + 1 < len(parts):
+                    try:
+                        layer_idx = int(parts[i + 1])
+                        if layer_idx < early_qkv_layers:
+                            param.requires_grad = True
+                            unfrozen_qkv += 1
+                    except ValueError:
+                        pass
+    print(f"  Unfroze Q/K/V in {unfrozen_qkv} early layers (0-{early_qkv_layers-1})")
+
     # Optimizer
     print(f"\n[4/6] Setting up optimizer...")
     optimizer = torch.optim.AdamW(
