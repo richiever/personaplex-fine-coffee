@@ -37,7 +37,7 @@ class Config:
 
     # Training
     EPOCHS = 4
-    LR = 1.5e-6
+    LR = 2e-6
     BATCH_SIZE = 1
     GRAD_CLIP = 1.0
     SEED = 42
@@ -46,12 +46,12 @@ class Config:
     WARMUP_RATIO = 0.1
 
     # LoRA
-    LORA_RANK = 32  # in_proj is fused Q/K/V [12288,4096], rank 32 gives ~10 effective per head
-    LORA_ALPHA = 64  # 2× rank
+    LORA_RANK = 16
+    LORA_ALPHA = 32  # 2x rank
     LORA_DROPOUT = 0.1
 
-    # Semantic weighting (CRITICAL FIX #3)
-    SEMANTIC_WEIGHT = 100.0  # Codebook 0
+    # Semantic weighting
+    SEMANTIC_WEIGHT = 50.0   # Codebook 0 (reduced for 1200 convos)
     ACOUSTIC_WEIGHT = 1.0    # Codebooks 1-7
 
     # Paths
@@ -384,8 +384,7 @@ def main(args):
         lora_alpha=config.LORA_ALPHA,
         lora_dropout=config.LORA_DROPOUT,
         target_modules=[
-            # PersonaPlex/Moshi architecture (confirmed via layer inspection)
-            'self_attn.in_proj',     # Fused Q/K/V projection (registered as module)
+            # PersonaPlex/Moshi architecture — no Q/K/V to preserve turn-taking
             'self_attn.out_proj',    # Attention output projection
             'gating.linear_in',      # Gating network input
             'gating.linear_out',     # Gating network output
@@ -394,11 +393,6 @@ def main(args):
 
     lm = get_peft_model(lm, peft_config)
     lm.print_trainable_parameters()
-
-    # Verify in_proj is actually targeted by LoRA
-    in_proj_count = sum(1 for n, _ in lm.named_modules() if 'in_proj' in n and 'lora' in n.lower())
-    print(f"  LoRA applied to {in_proj_count} in_proj modules")
-    assert in_proj_count > 0, "CRITICAL: LoRA not applied to in_proj! Check transformer.py module registration."
 
     # Optimizer
     print(f"\n[4/6] Setting up optimizer...")
