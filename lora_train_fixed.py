@@ -389,7 +389,6 @@ def main(args):
             'self_attn.out_proj',    # Attention output projection
             'gating.linear_in',      # Gating network input
             'gating.linear_out',     # Gating network output
-            'text_emb',              # Text token embeddings (input)
             'text_linear',           # Text token predictions (output)
         ]
     )
