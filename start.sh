@@ -21,7 +21,7 @@ GREETING_TOKENS="/app/barista_greeting_tokens.pt"
 REPO_DIR="/app"
 
 # Step 1: Download model weights if not present
-if [ ! -f "$MODEL_DIR/model.safetensors" ]; then
+if [ ! -f "$MODEL_DIR/model_3.safetensors" ]; then
     echo ""
     echo "[1/4] Downloading model weights from HuggingFace..."
     echo "      Repository: AnthrolyticB/personaplex-coffee-v1"
@@ -32,8 +32,8 @@ if [ ! -f "$MODEL_DIR/model.safetensors" ]; then
         --token "$HF_TOKEN"
 
     echo ""
-    echo "      Downloading model.safetensors from AnthrolyticB/infinisona-v1..."
-    huggingface-cli download AnthrolyticB/infinisona-v1 model.safetensors \
+    echo "      Downloading model_3.safetensors from AnthrolyticB/infinisona-v1..."
+    huggingface-cli download AnthrolyticB/infinisona-v1 model_3.safetensors \
         --local-dir "$MODEL_DIR" \
         --token "$HF_TOKEN"
 
@@ -97,7 +97,7 @@ echo ""
 echo "[4/4] Starting Moshi server..."
 echo "      Host: 0.0.0.0"
 echo "      Port: 8998"
-echo "      Model: $MODEL_DIR/model.safetensors"
+echo "      Model: $MODEL_DIR/model_3.safetensors"
 echo "      User voice prompt: $GREETING_TOKENS"
 echo ""
 echo "=========================================="
@@ -107,7 +107,7 @@ echo ""
 
 cd "$REPO_DIR" || { echo "ERROR: Could not cd to $REPO_DIR"; exit 1; }
 exec python -m moshi.server \
-    --moshi-weight "$MODEL_DIR/model.safetensors" \
+    --moshi-weight "$MODEL_DIR/model_3.safetensors" \
     --mimi-weight /app/codec/tokenizer-e351c8d8-checkpoint125.safetensors \
     --tokenizer /app/codec/tokenizer_spm_32k_3.model \
     --voice-prompt-dir /app/codec/voices \
