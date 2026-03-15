@@ -396,6 +396,14 @@ def main(args):
     lm = get_peft_model(lm, peft_config)
     lm.print_trainable_parameters()
 
+    # Directly unfreeze text_emb (ScaledEmbedding incompatible with PEFT LoRA)
+    text_emb_unfrozen = 0
+    for name, param in lm.named_parameters():
+        if 'text_emb' in name:
+            param.requires_grad = True
+            text_emb_unfrozen += 1
+    print(f"  Unfroze text_emb: {text_emb_unfrozen} parameters")
+
     # Optimizer
     print(f"\n[4/6] Setting up optimizer...")
     optimizer = torch.optim.AdamW(
