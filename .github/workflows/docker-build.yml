@@ -28,7 +28,7 @@ jobs:
           context: .
           file: Dockerfile.runpod
           push: true
-          tags: anthrolytic/personaplex-coffee:latest
+          tags: anthrolyticorg/personaplex-coffee:latest
           secrets: |
             hf_token=${{ secrets.HF_TOKEN }}
           cache-from: type=gha

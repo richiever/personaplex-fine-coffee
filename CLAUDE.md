@@ -32,7 +32,7 @@ Moshi real-time speech-to-speech server with PersonaPlex fine-tuning for coffee 
 
 ## Docker Image
 
-- **Registry**: `anthrolytic/personaplex-coffee:latest` (Docker Hub)
+- **Registry**: `anthrolyticorg/personaplex-coffee:latest` (Docker Hub)
 - **Base**: `runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`
 - **Size**: ~24GB (includes PyTorch 2.6, CUDA 12.4, Moshi, Chatterbox TTS, model weights)
 - **Working directory**: `/app` (NOT `/workspace` — RunPod mounts a volume at `/workspace` that overwrites image files)
@@ -47,7 +47,7 @@ Moshi real-time speech-to-speech server with PersonaPlex fine-tuning for coffee 
 DOCKER_BUILDKIT=1 docker build \
   -f Dockerfile.runpod \
   --secret id=hf_token,env=HF_TOKEN \
-  -t anthrolytic/personaplex-coffee:latest .
+  -t anthrolyticorg/personaplex-coffee:latest .
 ```
 
 ### CI Pipeline
@@ -111,7 +111,7 @@ When implementing a RunPod template for faster deployments:
 Name:            personaplex-coffee
 Type:            Pod
 Compute:         Nvidia GPU
-Container image: anthrolytic/personaplex-coffee:latest
+Container image: anthrolyticorg/personaplex-coffee:latest
 Start command:   bash /app/start.sh
 Container disk:  50 GB
 Volume disk:     0 GB
