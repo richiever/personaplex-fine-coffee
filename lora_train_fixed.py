@@ -50,7 +50,8 @@ class Config:
     LORA_ALPHA = 32  # 2x rank
     LORA_DROPOUT = 0.1
 
-    # Semantic weighting
+    # Loss weighting
+    TEXT_WEIGHT = 10.0       # Text tokens (system prompt + inner monologue)
     SEMANTIC_WEIGHT = 50.0   # Codebook 0 (reduced for 1200 convos)
     ACOUSTIC_WEIGHT = 1.0    # Codebooks 1-7
 
@@ -172,8 +173,8 @@ def compute_semantic_weighted_loss(output, target_codes, config):
         acoustic_loss = acoustic_loss / acoustic_count
 
     # Total loss: Sum all components
-    # Text + Semantic + Acoustic
-    total_loss = text_loss + semantic_loss + acoustic_loss
+    # Weighted text + Semantic + Acoustic
+    total_loss = config.TEXT_WEIGHT * text_loss + semantic_loss + acoustic_loss
 
     metrics = {
         'total': total_loss.item(),
@@ -393,24 +394,6 @@ def main(args):
 
     lm = get_peft_model(lm, peft_config)
     lm.print_trainable_parameters()
-
-    # Unfreeze Q/K/V in first 4 transformer layers for prompt attention
-    # Later layers (4-31) keep frozen Q/K/V to preserve turn-taking
-    early_qkv_layers = 4
-    unfrozen_qkv = 0
-    for name, param in lm.named_parameters():
-        if 'in_proj_weight' in name and 'depformer' not in name:
-            parts = name.split('.')
-            for i, part in enumerate(parts):
-                if part == 'layers' and i + 1 < len(parts):
-                    try:
-                        layer_idx = int(parts[i + 1])
-                        if layer_idx < early_qkv_layers:
-                            param.requires_grad = True
-                            unfrozen_qkv += 1
-                    except ValueError:
-                        pass
-    print(f"  Unfroze Q/K/V in {unfrozen_qkv} early layers (0-{early_qkv_layers-1})")
 
     # Optimizer
     print(f"\n[4/6] Setting up optimizer...")
