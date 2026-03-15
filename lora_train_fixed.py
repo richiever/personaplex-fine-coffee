@@ -51,7 +51,7 @@ class Config:
     LORA_DROPOUT = 0.1
 
     # Loss weighting
-    TEXT_WEIGHT = 40.0       # Text tokens (system prompt + inner monologue)
+    TEXT_WEIGHT = 100.0      # Text tokens (system prompt + inner monologue)
     SEMANTIC_WEIGHT = 100.0  # Codebook 0
     ACOUSTIC_WEIGHT = 1.0    # Codebooks 1-7
 
